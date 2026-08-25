@@ -1,0 +1,12 @@
+dimensions:
+  channel: {label: Acquisition Channel, column: acquisition_channel, table: users, sample_values: [Paid Social, Organic Search, Direct, Referral, Paid Search]}
+  campaign: {label: Campaign, column: campaign, table: users, sample_values: [social-growth-26, organic-content, customer-referral]}
+  country: {label: Country, column: country, table: users, sample_values: [United States, India, United Kingdom, Germany]}
+  device: {label: Device, column: device, table: sessions, sample_values: [Desktop, Mobile, Tablet]}
+  browser: {label: Browser, column: browser, table: sessions, sample_values: [Chrome, Safari, Firefox, Edge]}
+  plan: {label: Plan, column: plan, table: users, sample_values: [Free, Starter, Pro, Business]}
+  company_size: {label: Company Size, column: company_size, table: users, sample_values: [Solo, SMB, Mid-market, Enterprise]}
+  feature: {label: Feature, column: feature, table: events, sample_values: [AI Assistant, Exports, Integrations, Team Invitations, Advanced Reports]}
+  payment_method: {label: Payment Method, column: payment_method, table: transactions, sample_values: [Card, PayPal, Bank Transfer]}
+  checkout_context: {label: Checkout Context (device / browser / channel), column: "device + browser + channel", table: sessions, sample_values: ["Mobile / Safari / Paid Social", "Desktop / Chrome / Organic Search"]}
+  cohort: {label: Cohort, column: signup_at, table: users, sample_values: ["2026-08-17", "2026-08-10", "2026-08-03"]}

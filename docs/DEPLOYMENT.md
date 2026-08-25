@@ -1,0 +1,20 @@
+# Deployment
+
+Deploy the monorepo as two Vercel projects: `frontend/` for Next.js and `backend/` for FastAPI. Both use server-side environment variables; only `NEXT_PUBLIC_API_URL` is public. Supabase hosts PostgreSQL.
+
+Run migrations and deterministic seeding from a trusted local or CI administration job. Never migrate or seed during an HTTP request or serverless startup. The GitHub Actions backend job bootstraps the local role boundary, runs the Alembic migration, loads the smoke profile, and enables `RUN_DB_INTEGRATION=1` for real PostgreSQL API coverage.
+
+Before deployment, verify the backend bundle is below Vercel's Python limit and the database remains below 450 MB. Configure exact CORS origins, the migration-owner administration URL, both runtime database roles, provider keys, HMAC secret, quotas, cache TTL, and timeouts.
+
+Run `make preflight` after the frontend production build. The dependency-free gate checks both Vercel entry points, the required environment contract, standalone frontend output, and the local backend/frontend artifact sizes. Vercel remains the authoritative check for the final dependency bundle.
+
+## External deployment handoff
+
+1. In Supabase, click **Connect** and copy a direct connection string for administration/migrations. Supabase documents direct port `5432` as the option for migrations; use the session pooler on port `5432` instead if your network is IPv4-only. Keep the password private. ([Connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres))
+2. Set `DATABASE_SUPERUSER_URL`, `MIGRATION_OWNER_PASSWORD`, `APP_WRITER_PASSWORD`, and `ANALYTICS_READER_PASSWORD` in a local shell, then run `make bootstrap-roles`. The command creates the three least-privilege roles without storing their passwords in the repository.
+3. Replace the role URLs in your local environment with the Supabase host, database, and corresponding role passwords. Run `make migrate`, then `make seed`. Confirm the generated database remains below 450 MB and that the analytics-reader role can select approved views only.
+4. Create a Vercel project rooted at `backend/`. Deploy the FastAPI function from `api/index.py` and set `APP_DATABASE_URL`, `ANALYTICS_DATABASE_URL`, `DATABASE_ADMIN_URL` (administration only), `FRONTEND_ORIGIN`, `SESSION_HMAC_SECRET`, provider keys/models, quotas, cache TTL, timeout, and row-limit variables. For Supabase transaction-pooler URLs, the backend disables prepared statements for compatibility. Do not expose database URLs or provider keys as `NEXT_PUBLIC_*` variables.
+5. Create a second Vercel project rooted at `frontend/`, using `npm run build`, and set only `NEXT_PUBLIC_API_URL` to the deployed backend `/api/v1` URL.
+6. After both projects are live, verify `GET /api/v1/health`, `GET /api/v1/metadata/dataset`, one KPI request, the retention heatmap, and the flagship Deep Dive checkout question from desktop and mobile browsers. Capture the successful overview, Copilot evidence, and retention screens for the case study.
+
+The repository cannot perform these external steps without the Supabase/Vercel project credentials and production origin. No credentials are stored in this workspace.

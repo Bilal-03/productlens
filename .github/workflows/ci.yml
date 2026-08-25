@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: productlens
+          POSTGRES_USER: productlens
+          POSTGRES_PASSWORD: productlens
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U productlens"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_ADMIN_URL: postgresql+psycopg://migration_owner:migration_owner_local@localhost:5432/productlens
+      APP_DATABASE_URL: postgresql+psycopg://app_writer:app_writer_local@localhost:5432/productlens
+      ANALYTICS_DATABASE_URL: postgresql+psycopg://analytics_reader:analytics_reader_local@localhost:5432/productlens
+      RUN_DB_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e '.[dev]'
+        working-directory: backend
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - name: Bootstrap database roles
+        env:
+          PGPASSWORD: productlens
+        run: psql --host localhost --username productlens --dbname productlens --file database/init/001-local-roles.sql
+      - run: alembic upgrade head
+        working-directory: backend
+      - run: python -m app.data.generate --profile smoke --load
+        working-directory: backend
+      - run: ruff check .
+        working-directory: backend
+      - run: mypy app
+        working-directory: backend
+      - run: pytest --cov=app --cov-report=term-missing
+        working-directory: backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm test -- --run
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Deployment preflight
+        run: python3 scripts/deployment_preflight.py --require-frontend-build
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend

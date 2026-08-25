@@ -1,0 +1,31 @@
+tables:
+  users:
+    description: Synthetic product users and acquisition attributes.
+    primary_key: user_id
+    columns: [user_id, signup_at, country, region, acquisition_channel, campaign, plan, company_size, signup_source]
+    pii_columns: []
+  sessions:
+    description: Product and acquisition sessions linked to users.
+    primary_key: session_id
+    foreign_keys: {user_id: users.user_id}
+    columns: [session_id, user_id, started_at, ended_at, device, browser, operating_system, channel, campaign, landing_page]
+    pii_columns: []
+  events:
+    description: Product events recorded within sessions.
+    primary_key: event_id
+    foreign_keys: {user_id: users.user_id, session_id: sessions.session_id}
+    columns: [event_id, user_id, session_id, event_name, event_timestamp, page, feature, properties]
+    pii_columns: []
+  subscriptions:
+    description: Trial and paid subscription lifecycle records.
+    primary_key: subscription_id
+    foreign_keys: {user_id: users.user_id}
+    columns: [subscription_id, user_id, plan, status, started_at, trial_started_at, trial_ended_at, cancelled_at, mrr, billing_interval]
+    pii_columns: []
+  transactions:
+    description: Synthetic checkout, renewal, and refund transactions.
+    primary_key: transaction_id
+    foreign_keys: {user_id: users.user_id, subscription_id: subscriptions.subscription_id}
+    columns: [transaction_id, user_id, subscription_id, timestamp, amount, currency, status, payment_method, transaction_type, failure_reason]
+    pii_columns: []
+

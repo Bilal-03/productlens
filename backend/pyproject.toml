@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "productlens-backend"
+version = "0.1.0"
+description = "Safe, evidence-first product analytics API"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "alembic>=1.16,<2",
+  "fastapi>=0.116,<1",
+  "groq>=0.31,<1",
+  "httpx>=0.28,<1",
+  "numpy>=2.2,<3",
+  "pandas>=2.3,<3",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "PyYAML>=6.0,<7",
+  "sqlalchemy>=2.0,<3",
+  "sqlglot>=27,<29",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<7",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --disable-warnings --strict-markers"
+markers = [
+  "integration: tests that require a migrated and seeded PostgreSQL database",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008", "B023"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic"]
+
+[tool.vercel]
+runtime = "python3.12"

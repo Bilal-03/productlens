@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f8fb;
+  --surface: #ffffff;
+  --surface-soft: #f2f4f8;
+  --foreground: #151820;
+  --muted: #697080;
+  --border: #e1e5ec;
+  --accent: #635bff;
+  --accent-soft: #eeecff;
+  --success: #16875d;
+  --danger: #c63f4f;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--background); }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea, select { font: inherit; }
+button, a, input, textarea, select { outline-color: var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent-soft); color: #3027a8; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.03);
+}
+.eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.muted { color: var(--muted); }
+.skeleton {
+  animation: pulse 1.5s ease-in-out infinite;
+  background: linear-gradient(90deg, #eef0f4 25%, #f8f9fb 50%, #eef0f4 75%);
+  background-size: 200% 100%;
+  border-radius: 8px;
+}
+@keyframes pulse { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
