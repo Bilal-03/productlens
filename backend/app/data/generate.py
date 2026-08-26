@@ -44,6 +44,10 @@ REGIONS = {
 PLANS = np.array(["Free", "Starter", "Pro", "Business"])
 COMPANY_SIZES = np.array(["Solo", "SMB", "Mid-market", "Enterprise"])
 FEATURES = np.array(["AI Assistant", "Exports", "Integrations", "Team Invitations", "Advanced Reports"])
+QUALIFYING_ACTIVITY_EVENTS = (
+    "'dashboard_viewed', 'report_created', 'report_exported', "
+    "'ai_assistant_used', 'integration_connected', 'team_member_invited'"
+)
 
 
 def utc_at(day: date, minute: int = 0) -> datetime:
@@ -403,7 +407,7 @@ def load_dataset(generator: DatasetGenerator, profile_name: str) -> dict[str, in
     with psycopg.connect(psycopg_url(settings.database_admin_url)) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "TRUNCATE core.experiment_assignments, core.experiments, core.transactions, core.subscriptions, core.events, core.sessions, core.users RESTART IDENTITY CASCADE"
+                "TRUNCATE core.daily_activity, core.experiment_assignments, core.experiments, core.transactions, core.subscriptions, core.events, core.sessions, core.users RESTART IDENTITY CASCADE"
             )
             cursor.execute("TRUNCATE operational.dataset_metadata, operational.result_cache")
         counts["users"] = copy_rows(connection, "core.users", ["user_id", "signup_at", "country", "region", "acquisition_channel", "campaign", "plan", "company_size", "signup_source"], generator.users())
@@ -411,6 +415,14 @@ def load_dataset(generator: DatasetGenerator, profile_name: str) -> dict[str, in
         counts["experiments"] = copy_rows(connection, "core.experiments", ["experiment_id", "experiment_key", "name", "hypothesis", "primary_metric", "control_variant", "status", "started_at", "ended_at"], generator.experiments())
         counts["experiment_assignments"] = copy_rows(connection, "core.experiment_assignments", ["experiment_id", "user_id", "variant", "assigned_at"], generator.experiment_assignments())
         counts["events"] = copy_rows(connection, "core.events", ["event_id", "user_id", "session_id", "event_name", "event_timestamp", "page", "feature", "properties"], generator.events())
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""INSERT INTO core.daily_activity (activity_date, user_id)
+                SELECT DISTINCT (event_timestamp AT TIME ZONE 'UTC')::date, user_id
+                FROM core.events
+                WHERE event_name IN ({QUALIFYING_ACTIVITY_EVENTS})"""
+            )
+            cursor.execute("ANALYZE core.daily_activity")
         counts["subscriptions"] = copy_rows(connection, "core.subscriptions", ["subscription_id", "user_id", "plan", "status", "started_at", "trial_started_at", "trial_ended_at", "cancelled_at", "mrr", "billing_interval"], generator.subscriptions())
         counts["transactions"] = copy_rows(connection, "core.transactions", ["transaction_id", "user_id", "subscription_id", "timestamp", "amount", "currency", "status", "payment_method", "transaction_type", "failure_reason"], generator.transactions())
         with connection.cursor() as cursor:

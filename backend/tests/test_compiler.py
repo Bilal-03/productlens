@@ -188,6 +188,8 @@ def test_stickiness_compiler_uses_one_bounded_rolling_user_window() -> None:
     assert "user_windows AS" in query
     assert "rolling AS" in query
     assert "JOIN activity a" in query
+    assert "analytics.daily_activity" in query
+    assert "analytics.events" not in query
     assert "SELECT COUNT(DISTINCT a.user_id)" not in query
 
 

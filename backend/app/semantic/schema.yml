@@ -78,6 +78,16 @@ tables:
       feature: {data_type: text, description: Optional feature label, sample_values: [AI Assistant, Integrations, Team Invitations]}
       properties: {data_type: jsonb, description: Structured synthetic event properties, sample_values: ['{"variant":"control"}']}
     pii_columns: []
+  daily_activity:
+    description: PII-free daily distinct users with governed qualifying product activity.
+    primary_key: activity_date,user_id
+    foreign_keys: {user_id: users.user_id}
+    columns: [activity_date, user_id]
+    allowed_dimensions: []
+    column_metadata:
+      activity_date: {data_type: date, description: UTC calendar date of qualifying activity, sample_values: ["2026-08-23"]}
+      user_id: {data_type: bigint, description: Synthetic user identity, sample_values: [1, 2, 3]}
+    pii_columns: []
   subscriptions:
     description: Trial and paid subscription lifecycle records.
     primary_key: subscription_id

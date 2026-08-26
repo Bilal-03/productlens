@@ -261,45 +261,44 @@ def compile_stickiness(period: DateRange) -> SQLProposal:
     activity_start = period.start - timedelta(days=29)
     query = f"""
     WITH activity AS (
-      SELECT DISTINCT date_trunc('day', e.event_timestamp)::date AS bucket, e.user_id
-      FROM analytics.events e
-      WHERE e.event_timestamp >= '{activity_start.isoformat()}'::date
-        AND e.event_timestamp < '{period.end.isoformat()}'::date
-        AND e.event_name IN {QUALIFYING_ACTIVITY}
+      SELECT activity_date, user_id
+      FROM analytics.daily_activity
+      WHERE activity_date >= '{activity_start.isoformat()}'::date
+        AND activity_date < '{period.end.isoformat()}'::date
     ), daily AS (
-      SELECT bucket, COUNT(DISTINCT user_id)::int AS dau
+      SELECT activity_date, COUNT(*)::int AS dau
       FROM activity
-      WHERE bucket >= '{period.start.isoformat()}'::date
-      GROUP BY bucket
+      WHERE activity_date >= '{period.start.isoformat()}'::date
+      GROUP BY activity_date
     ), user_windows AS (
-      SELECT d.bucket, a.user_id,
-        COUNT(*) FILTER (WHERE a.bucket > d.bucket - 7) AS active_days_7,
+      SELECT d.activity_date, a.user_id,
+        COUNT(*) FILTER (WHERE a.activity_date > d.activity_date - 7) AS active_days_7,
         COUNT(*) AS active_days_30
       FROM daily d
       JOIN activity a
-        ON a.bucket > d.bucket - 30
-       AND a.bucket <= d.bucket
-      GROUP BY d.bucket, a.user_id
+        ON a.activity_date > d.activity_date - 30
+       AND a.activity_date <= d.activity_date
+      GROUP BY d.activity_date, a.user_id
     ), rolling AS (
-      SELECT bucket,
+      SELECT activity_date,
         COUNT(*) FILTER (WHERE active_days_7 > 0)::int AS wau,
         COUNT(*)::int AS mau,
         COUNT(*) FILTER (WHERE active_days_30 >= 10)::int AS power_users
       FROM user_windows
-      GROUP BY bucket
+      GROUP BY activity_date
     )
-    SELECT d.bucket::text AS period, d.dau, r.wau, r.mau,
+    SELECT d.activity_date::text AS period, d.dau, r.wau, r.mau,
       d.dau::float / NULLIF(r.wau, 0) AS dau_wau,
       d.dau::float / NULLIF(r.mau, 0) AS dau_mau,
       r.power_users
     FROM daily d
-    JOIN rolling r ON r.bucket = d.bucket
-    ORDER BY d.bucket
+    JOIN rolling r ON r.activity_date = d.activity_date
+    ORDER BY d.activity_date
     """
     return SQLProposal(
         query=query.strip(),
         purpose=f"Calculate daily stickiness and power users for {period.label}",
-        tables_used=["events"],
+        tables_used=["daily_activity"],
         metrics_used=["dau", "wau", "mau", "stickiness", "power_users"],
         assumptions=["Qualifying product activity defines active users", "Power users have activity on at least ten days in a trailing 30-day window"],
     )
