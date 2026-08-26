@@ -2,7 +2,7 @@
 
 ProductLens AI is an AI-assisted product analytics workspace that turns natural-language business questions into validated analytical investigations. It combines a governed semantic metrics layer, AST-validated read-only SQL, deterministic product analytics, controlled visualizations, and evidence-backed recommendations.
 
-> Current status: P0/P1 parity is implemented and validated locally. The remaining rollout steps are credential-gated production migration/reseed, deployment smoke checks, and screenshot capture; explicit P2/P3 non-goals remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
+> Current status: P0/P1 parity is implemented, deployed, and smoke-tested in production. The Supabase dataset is seeded at 199 MB (below the 450 MB gate); explicit P2/P3 non-goals remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
 
 ## Why it exists
 
@@ -37,7 +37,7 @@ Prerequisites: Docker, Node 22.x, npm 10+, and Python 3.12+.
 
 The dataset is synthetic and anchored to 2026-08-24 so relative-period demo questions remain reproducible.
 
-Validation gates currently include 262 fast backend tests plus five opt-in PostgreSQL API integration tests (267 when enabled in CI), a 58/58 offline planner/table/chart benchmark, 160 adversarial SQL-safety cases, frontend lint/typecheck/Vitest/build, deployment preflight, and eleven passing desktop/mobile Playwright flows (one desktop-only skip for the mobile navigation check). The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; the deployed database must still be checked against the documented 450 MB ceiling.
+Validation gates currently include 267 fast backend tests (plus five opt-in PostgreSQL API integration tests), a 58/58 offline planner/table/chart benchmark, 160 adversarial SQL-safety cases, frontend lint/typecheck/Vitest/build, deployment preflight, and eleven passing desktop/mobile Playwright flows (one desktop-only skip for the mobile navigation check). The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling.
 
 ## Documentation
 

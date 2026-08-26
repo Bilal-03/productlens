@@ -17,4 +17,8 @@ Run `make preflight` after the frontend production build. The dependency-free ga
 5. Create a second Vercel project rooted at `frontend/`, select Node.js 22.x, use `npm run build`, and set only `NEXT_PUBLIC_API_URL` to the deployed backend `/api/v1` URL.
 6. After both projects are live, verify `GET /api/v1/health`, `GET /api/v1/metadata/dataset`, KPI, overview, acquisition, feature adoption, weekly/monthly retention, exact history reopening, the flagship Deep Dive checkout question, and destructive-request rejection from desktop and mobile browsers. Capture the successful overview, Copilot evidence, acquisition, and retention screens for the case study.
 
-The repository cannot perform these external steps without the Supabase/Vercel project credentials and production origin. No credentials are stored in this workspace.
+## Current production verification
+
+The current deployment completed the checklist above on 2026-08-26. The Supabase full-profile database is 199 MB; dataset metadata reports 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions. The production smoke also verifies cumulative onboarding stages (no stage conversion above 100% or negative drop-off), 56.8% weekly and 88.8% monthly retention cards, and the flagship Deep Dive’s evidence-backed Mobile / Safari / Paid Social observation. Screenshots are stored in [`docs/screenshots/`](screenshots/).
+
+No Supabase or provider credentials are stored in this workspace. For a new project, repeat the handoff steps above; for the current project, the production URLs and evidence are recorded in [CASE_STUDY.md](CASE_STUDY.md).

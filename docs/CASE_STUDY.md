@@ -16,7 +16,7 @@ The deterministic generator injects a payment incident beginning 2026-08-18 for 
 
 ## Reproducibility
 
-The portfolio profile uses seed `20260824`, is anchored to dataset-as-of `2026-08-24`, and produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions. A prior clean PostgreSQL full-profile validation measured approximately 197 MB; recheck the exact size after loading this final generator revision, with the 450 MB deployment target retained as the gate.
+The portfolio profile uses seed `20260824`, is anchored to dataset-as-of `2026-08-24`, and produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions. The deployed Supabase database measured 199 MB after the final migration and seed, below the 450 MB deployment gate.
 
 ## What this demonstrates
 
@@ -33,8 +33,18 @@ The portfolio profile uses seed `20260824`, is anchored to dataset-as-of `2026-0
 - [ProductLens web](https://productlens-web-six.vercel.app)
 - [ProductLens API](https://productlens-api.vercel.app)
 
-The deployed URLs are useful for review; after this parity release, the production database must be migrated/reseeded and the smoke checklist in [Deployment](DEPLOYMENT.md) rerun against the current commit.
+The production rollout was completed on 2026-08-26: migration `0002_p0p1_completion`, full seed validation, live endpoint checks, corrected cumulative funnel verification, Copilot/history/security checks, and the evidence below were run against the current deployment.
+
+## Production evidence
+
+![Production overview](screenshots/production-overview-viewport.png)
+
+![Production Copilot Deep Dive](screenshots/production-copilot-viewport.png)
+
+![Production acquisition analytics](screenshots/production-acquisition-viewport.png)
+
+![Production retention analytics](screenshots/production-retention-viewport.png)
 
 ## Limitations
 
-The data is synthetic and observational. The application does not establish causality, does not provide authentication or cross-device history, and is not positioned as an enterprise-scale production system. Live provider scoring is intentionally not claimed without a timestamped evaluation artifact. Screenshots should be captured from the current production URLs during the final rollout smoke test.
+The data is synthetic and observational. The application does not establish causality, does not provide authentication or cross-device history, and is not positioned as an enterprise-scale production system. Live provider scoring is intentionally not claimed without a timestamped evaluation artifact. The screenshots above are captured from the current production URLs; the deterministic fallback is shown when provider quota or availability requires it.
