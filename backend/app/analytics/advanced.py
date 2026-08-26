@@ -33,6 +33,7 @@ class AdvancedAnalyticsService:
 
     QUERY_WORKERS = 4
     RISK_DIMENSIONS = ("plan", "company_size", "channel")
+    CACHE_VERSION = "advanced-analytics-v2"
 
     def __init__(self, database: DatabaseService, validator: SQLValidator) -> None:
         self.database = database
@@ -43,7 +44,7 @@ class AdvancedAnalyticsService:
             raise ValueError("Advanced analytics supports last_30_days or last_90_days")
         period = resolve_period(period_name)
         dataset_version = self.database.dataset_version()
-        cache_key = self._cache_key("advanced-analytics", {"period": period_name})
+        cache_key = self._cache_key(self.CACHE_VERSION, {"period": period_name})
         if dataset_version:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:

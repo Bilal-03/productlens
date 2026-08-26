@@ -182,6 +182,15 @@ def test_experiment_and_advanced_compilers_are_bounded_and_allowlisted() -> None
         assert validation.limited is True or "LIMIT" in proposal.query.upper()
 
 
+def test_stickiness_compiler_uses_one_bounded_rolling_user_window() -> None:
+    query = compile_stickiness(resolve_period("last_90_days")).query
+
+    assert "user_windows AS" in query
+    assert "rolling AS" in query
+    assert "JOIN activity a" in query
+    assert "SELECT COUNT(DISTINCT a.user_id)" not in query
+
+
 @pytest.mark.parametrize("metric", ["activation_rate", "checkout_conversion", "payment_success_rate"])
 def test_experiment_compiler_allowlists_primary_metrics(metric: str) -> None:
     proposal = compile_experiment_analysis("onboarding-redesign", resolve_period("last_90_days"), metric)

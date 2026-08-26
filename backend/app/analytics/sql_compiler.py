@@ -279,24 +279,29 @@ def compile_stickiness(period: DateRange) -> SQLProposal:
       FROM activity
       WHERE bucket >= '{period.start.isoformat()}'::date
       GROUP BY bucket
+    ), user_windows AS (
+      SELECT d.bucket, a.user_id,
+        COUNT(*) FILTER (WHERE a.bucket > d.bucket - 7) AS active_days_7,
+        COUNT(*) AS active_days_30
+      FROM daily d
+      JOIN activity a
+        ON a.bucket > d.bucket - 30
+       AND a.bucket <= d.bucket
+      GROUP BY d.bucket, a.user_id
+    ), rolling AS (
+      SELECT bucket,
+        COUNT(*) FILTER (WHERE active_days_7 > 0)::int AS wau,
+        COUNT(*)::int AS mau,
+        COUNT(*) FILTER (WHERE active_days_30 >= 10)::int AS power_users
+      FROM user_windows
+      GROUP BY bucket
     )
-    SELECT d.bucket::text AS period, d.dau,
-      (SELECT COUNT(DISTINCT a.user_id)::int FROM activity a
-       WHERE a.bucket > d.bucket - 7 AND a.bucket <= d.bucket) AS wau,
-      (SELECT COUNT(DISTINCT a.user_id)::int FROM activity a
-       WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket) AS mau,
-      d.dau::float / NULLIF((SELECT COUNT(DISTINCT a.user_id) FROM activity a
-        WHERE a.bucket > d.bucket - 7 AND a.bucket <= d.bucket), 0) AS dau_wau,
-      d.dau::float / NULLIF((SELECT COUNT(DISTINCT a.user_id) FROM activity a
-        WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket), 0) AS dau_mau,
-      (SELECT COUNT(*)::int FROM (
-        SELECT a.user_id
-        FROM activity a
-        WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket
-        GROUP BY a.user_id
-        HAVING COUNT(*) >= 10
-      ) power) AS power_users
+    SELECT d.bucket::text AS period, d.dau, r.wau, r.mau,
+      d.dau::float / NULLIF(r.wau, 0) AS dau_wau,
+      d.dau::float / NULLIF(r.mau, 0) AS dau_mau,
+      r.power_users
     FROM daily d
+    JOIN rolling r ON r.bucket = d.bucket
     ORDER BY d.bucket
     """
     return SQLProposal(
