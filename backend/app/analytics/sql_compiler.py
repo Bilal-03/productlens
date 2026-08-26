@@ -621,17 +621,64 @@ def compile_retention_curve(
     max_day = max(normalized_windows)
     filter_sql = _filter_sql("d30_retention", filters)
     anchor_expression = "u.signup_at" if cohort_type == "signup" else "a.anchor_at"
-    activation_cte = ""
-    activation_join = ""
+
+    # Device/browser are derived from the user's first session. Avoid scanning
+    # and aggregating the entire sessions view for overall/channel/country/plan
+    # cohorts, where those attributes are not needed. This keeps the governed
+    # retention statement comfortably inside the five-second runtime budget on
+    # the small Supabase instance used by the public demo.
+    needs_session_attributes = dimension in {"device", "browser"} or any(
+        item.dimension in {"device", "browser"} for item in (filters or [])
+    )
+    ctes: list[str] = []
+    session_join = ""
+    device_expression = "'Unknown'::text"
+    browser_expression = "'Unknown'::text"
+    if needs_session_attributes:
+        ctes.append(
+            """first_sessions AS (
+          SELECT s.user_id,
+            MIN(s.device) AS device,
+            MIN(s.browser) AS browser
+          FROM analytics.sessions s
+          GROUP BY s.user_id
+        )"""
+        )
+        session_join = "LEFT JOIN first_sessions s ON s.user_id = u.user_id"
+        device_expression = "COALESCE(s.device, 'Unknown')"
+        browser_expression = "COALESCE(s.browser, 'Unknown')"
     if cohort_type == "activation":
-        activation_cte = """
-        activation_times AS (
+        ctes.append(
+            """activation_times AS (
           SELECT e.user_id,
             MIN(CASE WHEN e.event_name = 'onboarding_completed' THEN e.event_timestamp END) AS anchor_at
           FROM analytics.events e
           GROUP BY e.user_id
-        ),"""
-        activation_join = "LEFT JOIN activation_times a ON a.user_id = u.user_id"
+        )"""
+        )
+        session_join += "\n      LEFT JOIN activation_times a ON a.user_id = u.user_id"
+
+    ctes.append(
+        f"""cohort_users AS (
+      SELECT u.user_id,
+        u.signup_at,
+        u.acquisition_channel,
+        u.campaign,
+        u.country,
+        u.plan,
+        u.company_size,
+        {device_expression} AS device,
+        {browser_expression} AS browser,
+        {anchor_expression} AS anchor_at,
+        date_trunc('week', {anchor_expression})::date AS cohort
+      FROM analytics.users u
+      {session_join}
+      WHERE {anchor_expression} IS NOT NULL
+        AND {anchor_expression} >= '{period.start.isoformat()}'::date
+        AND {anchor_expression} < '{period.end.isoformat()}'::date
+        {filter_sql}
+    )"""
+    )
 
     value_columns: list[str] = []
     for day in normalized_windows:
@@ -644,33 +691,7 @@ def compile_retention_curve(
         )
 
     query = f"""
-    WITH first_sessions AS (
-      SELECT s.user_id,
-        MIN(s.device) AS device,
-        MIN(s.browser) AS browser
-      FROM analytics.sessions s
-      GROUP BY s.user_id
-    ), {activation_cte}
-    cohort_users AS (
-      SELECT u.user_id,
-        u.signup_at,
-        u.acquisition_channel,
-        u.campaign,
-        u.country,
-        u.plan,
-        u.company_size,
-        COALESCE(s.device, 'Unknown') AS device,
-        COALESCE(s.browser, 'Unknown') AS browser,
-        {anchor_expression} AS anchor_at,
-        date_trunc('week', {anchor_expression})::date AS cohort
-      FROM analytics.users u
-      LEFT JOIN first_sessions s ON s.user_id = u.user_id
-      {activation_join}
-      WHERE {anchor_expression} IS NOT NULL
-        AND {anchor_expression} >= '{period.start.isoformat()}'::date
-        AND {anchor_expression} < '{period.end.isoformat()}'::date
-        {filter_sql}
-    )
+    WITH {', '.join(ctes)}
     SELECT c.cohort::text AS bucket,
       {segment} AS segment,
       COUNT(DISTINCT c.user_id)::float AS cohort_size,
@@ -686,7 +707,7 @@ def compile_retention_curve(
     return SQLProposal(
         query=query.strip(),
         purpose=f"Calculate retention curve ({', '.join(f'D{day}' for day in normalized_windows)}) for {period.label}",
-        tables_used=["users", "sessions", "events"],
+        tables_used=["users", "events"] + (["sessions"] if needs_session_attributes else []),
         metrics_used=[f"d{day}_retention" for day in normalized_windows],
         assumptions=[
             "UTC date boundaries",

@@ -73,6 +73,18 @@ def test_retention_curve_rejects_unsupported_windows() -> None:
         compile_retention_curve(resolve_period("last_90_days"), [14])
 
 
+def test_retention_curve_skips_unneeded_sessions_aggregation() -> None:
+    channel_query = compile_retention_curve(
+        resolve_period("last_90_days"), [1, 7, 30], dimension="channel"
+    ).query
+    device_query = compile_retention_curve(
+        resolve_period("last_90_days"), [1, 7, 30], dimension="device"
+    ).query
+
+    assert "first_sessions" not in channel_query
+    assert "first_sessions" in device_query
+
+
 @pytest.mark.parametrize("metric", ["visitors", "signups", "activated_users", "channel_conversion"])
 def test_acquisition_stages_compile_to_safe_sql(metric: str) -> None:
     proposal = compile_metric(metric, resolve_period("last_week"), "campaign")
