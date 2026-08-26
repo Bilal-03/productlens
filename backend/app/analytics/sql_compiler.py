@@ -702,28 +702,88 @@ def compile_funnel(
     dimension: str | None = None,
     filters: list[Filter] | None = None,
 ) -> SQLProposal:
-    if dimension == "payment_method":
-        raise ValueError("Payment method is not available for funnel analysis")
-    if dimension and dimension not in DIMENSIONS:
-        raise ValueError(f"Unknown funnel dimension: {dimension}")
-    if filters and any(item.dimension == "payment_method" for item in filters):
-        raise ValueError("Payment method is not available for funnel analysis")
+    if funnel not in {"acquisition", "onboarding", "checkout"}:
+        raise ValueError(f"Unknown funnel: {funnel}")
+
+    # Funnel dimensions describe the context of the user's entry into the
+    # funnel. Transaction-only dimensions belong to revenue diagnostics and
+    # would otherwise reference aliases that are not present in this query.
+    funnel_dimensions = {"channel", "campaign", "country", "device", "browser", "plan", "company_size"}
+    if dimension and dimension not in funnel_dimensions:
+        raise ValueError(f"Dimension '{dimension}' is not available for funnel analysis")
+    if filters and any(item.dimension not in funnel_dimensions for item in filters):
+        raise ValueError("Funnel filters must use acquisition, user, or session dimensions")
+
     steps = {
         "acquisition": ["landing_page_viewed", "signup_started", "signup_completed"],
-        "onboarding": ["signup_completed", "onboarding_started", "profile_completed", "integration_connected", "onboarding_completed"],
+        "onboarding": [
+            "signup_completed",
+            "onboarding_started",
+            "profile_completed",
+            "integration_connected",
+            "onboarding_completed",
+        ],
         "checkout": ["pricing_viewed", "checkout_started", "payment_submitted", "payment_success"],
     }[funnel]
-    segment, group = segment_parts(dimension)
     filters_sql = _filter_sql(None, filters)
     values = ", ".join(f"'{step}'" for step in steps)
-    order = "CASE e.event_name " + " ".join(f"WHEN '{step}' THEN {i}" for i, step in enumerate(steps, 1)) + " END"
-    query = f"""
-    SELECT {segment}, e.event_name AS stage, COUNT(DISTINCT e.user_id)::float AS users, {order} AS stage_order
-    FROM analytics.events e JOIN analytics.sessions s ON s.session_id=e.session_id
-    JOIN analytics.users u ON u.user_id=e.user_id
-    WHERE {period_sql(period, 'e.event_timestamp')} AND e.event_name IN ({values})
-      {filters_sql}
-    {group + (', e.event_name' if group else 'GROUP BY e.event_name')}
-    ORDER BY stage_order
-    """
-    return SQLProposal(query=query.strip(), purpose=f"Calculate the {funnel} funnel", tables_used=["events", "sessions", "users"], metrics_used=[f"{funnel}_funnel"])
+    segment_expression = DIMENSIONS[dimension] if dimension else "'All'::text"
+    segment_group = f", {DIMENSIONS[dimension]}" if dimension else ""
+
+    # Build an ordered, cohort-safe funnel. The old event-level aggregation
+    # counted every matching event in the period, allowing (for example)
+    # integration events from returning users to exceed signup users. Each
+    # stage below is now restricted to users who completed every prior stage in
+    # order, so stage conversion and drop-off are always meaningful.
+    ctes = [
+        f"""funnel_base AS (
+          SELECT e.user_id,
+            COALESCE(({segment_expression})::text, 'Unknown') AS segment,
+            MIN(CASE WHEN e.event_name = '{steps[0]}' THEN e.event_timestamp END) AS stage_1_at
+          FROM analytics.events e
+          JOIN analytics.sessions s ON s.session_id = e.session_id
+          JOIN analytics.users u ON u.user_id = e.user_id
+          WHERE {period_sql(period, 'e.event_timestamp')}
+            AND e.event_name IN ({values})
+            {filters_sql}
+          GROUP BY e.user_id{segment_group}
+        )"""
+    ]
+    previous_cte = "funnel_base"
+    previous_stage_columns = ["stage_1_at"]
+    for stage_number, step in enumerate(steps[1:], start=2):
+        current_cte = f"funnel_stage_{stage_number}"
+        group_columns = ", ".join(["previous.user_id", "previous.segment", *[f"previous.{column}" for column in previous_stage_columns]])
+        ctes.append(
+            f"""{current_cte} AS (
+              SELECT previous.*,
+                MIN(e.event_timestamp) AS stage_{stage_number}_at
+              FROM {previous_cte} previous
+              LEFT JOIN analytics.events e
+                ON e.user_id = previous.user_id
+                AND e.event_name = '{step}'
+                AND e.event_timestamp >= previous.stage_{stage_number - 1}_at
+                AND e.event_timestamp < '{period.end.isoformat()}'::date
+              GROUP BY {group_columns}
+            )"""
+        )
+        previous_cte = current_cte
+        previous_stage_columns.append(f"stage_{stage_number}_at")
+
+    stage_selects = [
+        f"""SELECT segment,
+          '{step}' AS stage,
+          COUNT(DISTINCT CASE WHEN stage_{stage_number}_at IS NOT NULL THEN user_id END)::float AS users,
+          {stage_number} AS stage_order
+        FROM {previous_cte}
+        GROUP BY segment"""
+        for stage_number, step in enumerate(steps, start=1)
+    ]
+    query = f"WITH {', '.join(ctes)}\n" + "\nUNION ALL\n".join(stage_selects) + "\nORDER BY stage_order, segment"
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Calculate the {funnel} funnel",
+        tables_used=["events", "sessions", "users"],
+        metrics_used=[f"{funnel}_funnel"],
+        assumptions=["Stages are ordered and cumulative within the resolved UTC period"],
+    )

@@ -3,6 +3,7 @@ import pytest
 from app.analytics.sql_compiler import (
     compile_acquisition,
     compile_feature_adoption,
+    compile_funnel,
     compile_metric,
     compile_retention_curve,
 )
@@ -97,6 +98,21 @@ def test_acquisition_does_not_accept_transaction_only_filters() -> None:
             "channel",
             filters=[Filter(dimension="failure_reason", value="card_declined")],
         )
+
+
+@pytest.mark.parametrize("funnel", ["acquisition", "onboarding", "checkout"])
+def test_funnel_compiler_uses_ordered_cumulative_stages(funnel: str) -> None:
+    proposal = compile_funnel(funnel, resolve_period("last_week"), "channel")
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert "funnel_base AS" in proposal.query
+    assert "e.event_timestamp >= previous.stage_1_at" in proposal.query
+    assert "COUNT(DISTINCT CASE WHEN stage_1_at IS NOT NULL THEN user_id END)" in proposal.query
+
+
+def test_funnel_rejects_diagnostic_only_dimensions() -> None:
+    with pytest.raises(ValueError, match="not available for funnel"):
+        compile_funnel("checkout", resolve_period("last_week"), "failure_reason")
 
 
 def test_paid_users_kpi_uses_successful_transactions_or_period_end_subscriptions() -> None:
