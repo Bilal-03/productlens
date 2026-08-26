@@ -47,6 +47,7 @@ from app.models.contracts import (
     NotebookSummaryResponse,
     OverviewAnalyticsResponse,
     OverviewRequest,
+    OverviewSummaryResponse,
     ProductPulseResponse,
     RetentionAnalyticsResponse,
     RetentionRequest,
@@ -323,6 +324,20 @@ def overview_analysis(
 ) -> OverviewAnalyticsResponse:
     try:
         return OverviewAnalyticsResponse.model_validate(service.overview(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/analytics/overview/summary", response_model=OverviewSummaryResponse)
+def overview_summary_analysis(
+    request: OverviewRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    service: AnalyticsService = Depends(analytics_service),
+) -> OverviewSummaryResponse:
+    try:
+        return OverviewSummaryResponse.model_validate(service.overview_summary(request))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DatabaseUnavailable as exc:

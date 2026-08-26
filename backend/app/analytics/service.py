@@ -14,7 +14,7 @@ from app.analytics.sql_compiler import (
     compile_retention_curve,
 )
 from app.analytics.time_ranges import default_comparison, resolve_period, source_as_of
-from app.database.service import DatabaseService
+from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
     AcquisitionAnalyticsResponse,
     AcquisitionRequest,
@@ -26,6 +26,7 @@ from app.models.contracts import (
     FunnelRequest,
     OverviewAnalyticsResponse,
     OverviewRequest,
+    OverviewSummaryResponse,
     RetentionAnalyticsResponse,
     RetentionHeatmap,
     RetentionRequest,
@@ -55,11 +56,18 @@ class AnalyticsService:
     def _dataset_as_of(self) -> date:
         return source_as_of(self.database)
 
-    def metric(self, request: AnalyticsRequest) -> dict[str, Any]:
+    def metric(
+        self,
+        request: AnalyticsRequest,
+        *,
+        use_cache: bool = True,
+        include_comparison: bool = True,
+        use_daily_activity_rollup: bool = False,
+    ) -> dict[str, Any]:
         if request.metric == "feature_adoption":
             return self.feature_adoption(request)
         cache_key = self._cache_key("metric", request.model_dump(mode="json"))
-        dataset_version = self.database.dataset_version()
+        dataset_version = self.database.dataset_version() if use_cache else None
         if dataset_version:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
@@ -67,16 +75,30 @@ class AnalyticsService:
         as_of = self._dataset_as_of()
         registry.validate_dimension(request.metric, request.dimension)
         current_period = resolve_period(request.period, as_of)
-        previous_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
+        previous_period = None
+        if include_comparison:
+            previous_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
         current, current_sql, current_ms = self.execute(
-            compile_metric(request.metric, current_period, request.dimension, request.filters)
+            compile_metric(
+                request.metric,
+                current_period,
+                request.dimension,
+                request.filters,
+                use_daily_activity_rollup=use_daily_activity_rollup,
+            )
         )
         previous: list[dict[str, Any]] = []
         previous_sql = ""
         previous_ms = 0.0
         if previous_period:
             previous, previous_sql, previous_ms = self.execute(
-                compile_metric(request.metric, previous_period, request.dimension, request.filters)
+                compile_metric(
+                    request.metric,
+                    previous_period,
+                    request.dimension,
+                    request.filters,
+                    use_daily_activity_rollup=use_daily_activity_rollup,
+                )
             )
         payload = {
             "metric": registry.metric(request.metric).model_dump(),
@@ -92,9 +114,9 @@ class AnalyticsService:
             self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
         return payload
 
-    def acquisition(self, request: AcquisitionRequest) -> dict[str, Any]:
+    def acquisition(self, request: AcquisitionRequest, *, use_cache: bool = True) -> dict[str, Any]:
         cache_key = self._cache_key("acquisition", request.model_dump(mode="json"))
-        dataset_version = self.database.dataset_version()
+        dataset_version = self.database.dataset_version() if use_cache else None
         if dataset_version:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
@@ -255,17 +277,24 @@ class AnalyticsService:
                         metric=metric_name,
                         period="last_90_days" if metric_name == "d30_retention" else kpi_period,
                     ),
+                    use_cache=False,
                 )
                 for metric_name in kpi_names
             }
             acquisition_job = executor.submit(
                 self.acquisition,
                 AcquisitionRequest(period=kpi_period, dimension="channel"),
+                use_cache=False,
             )
-            funnel_job = executor.submit(self.funnel, FunnelRequest(funnel="onboarding", period=kpi_period))
+            funnel_job = executor.submit(
+                self.funnel,
+                FunnelRequest(funnel="onboarding", period=kpi_period),
+                use_cache=False,
+            )
             retention_job = executor.submit(
                 self.retention,
                 RetentionRequest(period="last_90_days", windows=[1, 7, 30]),
+                use_cache=False,
             )
             revenue_trend_job = executor.submit(
                 self.trend,
@@ -297,9 +326,80 @@ class AnalyticsService:
             self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
         return payload
 
-    def funnel(self, request: FunnelRequest) -> dict[str, Any]:
-        cache_key = self._cache_key("funnel", request.model_dump(mode="json"))
+    def overview_summary(self, request: OverviewRequest) -> dict[str, Any]:
+        """Compute only the critical KPI cards for a fast first paint.
+
+        The full overview intentionally remains available for the detailed
+        charts and tables, but it should not block the headline cards behind
+        acquisition, funnel, retention, and trend work. Summary workers also
+        skip child result-cache lookups and comparisons; the full overview
+        cache remains the source of truth for the deferred detail request.
+        """
+
+        cache_key = self._cache_key("overview_summary", request.model_dump(mode="json"))
         dataset_version = self.database.dataset_version()
+        if dataset_version:
+            cached = self.database.cache_get(cache_key, dataset_version)
+            if cached is not None:
+                return cached
+
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
+        comparison_period = default_comparison(request.period, as_of)
+        metric_periods = {
+            "d30_retention": "last_90_days",
+            "mau": request.period,
+            "activation_rate": request.period,
+            "checkout_conversion": request.period,
+            "mrr": request.period,
+            "churn_rate": request.period,
+        }
+
+        def load(metric_name: str) -> tuple[str, dict[str, Any] | None, str | None]:
+            try:
+                payload = self.metric(
+                    AnalyticsRequest(metric=metric_name, period=metric_periods[metric_name]),
+                    use_cache=False,
+                    include_comparison=False,
+                    use_daily_activity_rollup=True,
+                )
+                return metric_name, payload, None
+            except (DatabaseUnavailable, ValueError) as exc:
+                return metric_name, None, str(exc)
+
+        kpis: dict[str, dict[str, Any]] = {}
+        warnings: list[str] = []
+        with ThreadPoolExecutor(max_workers=len(metric_periods)) as executor:
+            jobs = [executor.submit(load, metric_name) for metric_name in metric_periods]
+            for job in jobs:
+                metric_name, payload, error = job.result()
+                if payload is not None:
+                    kpis[metric_name] = payload
+                elif error:
+                    warnings.append(f"{metric_name}: unavailable")
+
+        if not kpis:
+            raise DatabaseUnavailable("The overview summary could not be calculated")
+
+        payload = OverviewSummaryResponse(
+            period=period,
+            comparison_period=comparison_period,
+            dataset_as_of=as_of,
+            kpis=kpis,
+            warnings=warnings,
+        ).model_dump(mode="json")
+        if dataset_version:
+            self.database.cache_put(
+                cache_key,
+                dataset_version,
+                payload,
+                self.database.settings.result_cache_ttl_seconds,
+            )
+        return payload
+
+    def funnel(self, request: FunnelRequest, *, use_cache: bool = True) -> dict[str, Any]:
+        cache_key = self._cache_key("funnel", request.model_dump(mode="json"))
+        dataset_version = self.database.dataset_version() if use_cache else None
         if dataset_version:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
@@ -444,9 +544,9 @@ class AnalyticsService:
             "execution_ms": execution_ms,
         }
 
-    def retention(self, request: RetentionRequest) -> dict[str, Any]:
+    def retention(self, request: RetentionRequest, *, use_cache: bool = True) -> dict[str, Any]:
         cache_key = self._cache_key("retention", request.model_dump(mode="json"))
-        dataset_version = self.database.dataset_version()
+        dataset_version = self.database.dataset_version() if use_cache else None
         if dataset_version:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:

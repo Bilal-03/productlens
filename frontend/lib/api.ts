@@ -1,4 +1,4 @@
-import type { AccessContextResponse, AdvancedAnalyticsResponse, ConnectorStatusResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AccessContextResponse, AdvancedAnalyticsResponse, ConnectorStatusResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, OverviewSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 const ACCESS_TOKEN_KEY = "productlens-access-token";
@@ -70,6 +70,13 @@ export function getAccessContext() {
 
 export function getConnectorStatus() {
   return api<ConnectorStatusResponse>("/connectors/status");
+}
+
+export function getOverviewSummary(period = "last_30_days") {
+  return api<OverviewSummaryResponse>("/analytics/overview/summary", {
+    method: "POST",
+    body: JSON.stringify({ period }),
+  });
 }
 
 export function analyze(question: string, mode: "quick" | "deep", selected_metric?: string) {

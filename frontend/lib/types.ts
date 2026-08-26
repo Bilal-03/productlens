@@ -132,6 +132,15 @@ export type OverviewResponse = {
   retention_snapshot: { heatmap: { x_labels: string[]; y_labels: string[]; matrix: (number | null)[][]; cohort_sizes: number[] } };
 };
 
+export type OverviewSummaryResponse = {
+  type: "overview_summary";
+  period: DateRange;
+  comparison_period: DateRange | null;
+  dataset_as_of: string;
+  kpis: OverviewResponse["kpis"];
+  warnings: string[];
+};
+
 export type ExperimentSummary = {
   experiment_key: string;
   name: string;

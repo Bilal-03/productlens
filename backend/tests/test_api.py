@@ -32,6 +32,7 @@ from app.models.contracts import (
     FeatureAdoptionRow,
     JourneyPath,
     OverviewAnalyticsResponse,
+    OverviewSummaryResponse,
     ProactiveMetadata,
     ProactiveSQLTransparency,
     ProductPulseResponse,
@@ -138,6 +139,13 @@ def test_new_analytics_routes_return_typed_contracts() -> None:
         activation_funnel={"segments": {"All": [{"stage": "signup_completed", "users": 10}]}},
         retention_snapshot=_retention_payload(),
     )
+    overview_summary = OverviewSummaryResponse(
+        period={"start": "2026-08-17", "end": "2026-08-24", "label": "Last Week"},
+        comparison_period=None,
+        dataset_as_of=date(2026, 8, 24),
+        kpis={"mau": {"current": [{"value": 10}]}},
+        warnings=[],
+    )
 
     class StubAnalytics:
         def acquisition(self, request: object) -> dict[str, object]:
@@ -149,16 +157,23 @@ def test_new_analytics_routes_return_typed_contracts() -> None:
         def overview(self, request: object) -> dict[str, object]:
             return overview.model_dump(mode="json")
 
+        def overview_summary(self, request: object) -> dict[str, object]:
+            return overview_summary.model_dump(mode="json")
+
     app.dependency_overrides[analytics_service] = lambda: StubAnalytics()  # type: ignore[assignment]
     try:
         assert client.post("/api/v1/analytics/acquisition", json={}).status_code == 200
         assert client.post("/api/v1/analytics/feature-adoption", json={"metric": "feature_adoption"}).status_code == 200
         overview_response = client.post("/api/v1/analytics/overview", json={})
+        summary_response = client.post("/api/v1/analytics/overview/summary", json={})
     finally:
         app.dependency_overrides.clear()
     assert overview_response.status_code == 200
     assert overview_response.json()["type"] == "overview_analysis"
     assert overview_response.json()["acquisition"]["segments"][0]["visitors"] == 10
+    assert summary_response.status_code == 200
+    assert summary_response.json()["type"] == "overview_summary"
+    assert summary_response.json()["kpis"]["mau"]["current"][0]["value"] == 10
 
 
 def test_history_reopen_is_session_scoped_and_does_not_consume_quota() -> None:

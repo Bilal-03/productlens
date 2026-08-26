@@ -205,6 +205,27 @@ def test_stickiness_compiler_uses_one_bounded_rolling_user_window() -> None:
     assert "SELECT COUNT(DISTINCT a.user_id)" not in query
 
 
+def test_mau_uses_the_daily_activity_rollup_on_the_unfiltered_overview_path() -> None:
+    proposal = compile_metric(
+        "mau",
+        resolve_period("last_30_days"),
+        use_daily_activity_rollup=True,
+    )
+    validation = SQLValidator().validate(proposal.query)
+
+    assert validation.valid, validation.errors
+    assert proposal.tables_used == ["daily_activity"]
+    assert "analytics.daily_activity" in proposal.query
+    assert "analytics.events" not in proposal.query
+
+
+def test_default_mau_compiler_keeps_the_event_contract() -> None:
+    proposal = compile_metric("mau", resolve_period("last_30_days"))
+
+    assert "analytics.events" in proposal.query
+    assert "analytics.daily_activity" not in proposal.query
+
+
 @pytest.mark.parametrize("metric", ["activation_rate", "checkout_conversion", "payment_success_rate"])
 def test_experiment_compiler_allowlists_primary_metrics(metric: str) -> None:
     proposal = compile_experiment_analysis("onboarding-redesign", resolve_period("last_90_days"), metric)

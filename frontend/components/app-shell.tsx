@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, BarChart3, BookOpen, Bookmark, BrainCircuit, ChevronDown, CircleAlert, Database, FileText, History, LayoutDashboard, LogIn, LogOut, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/components/ui";
@@ -53,28 +53,39 @@ function SidebarContent({ close }: { close?: () => void }) {
 function WorkspaceStatus() {
   const auth = useAuth();
   const accessScope = auth.session?.access_token ?? getAccessToken() ?? "anonymous";
+  const [sourceCheckReadyFor, setSourceCheckReadyFor] = useState<string | null>(null);
   const context = useQuery({
     queryKey: ["access-context", accessScope],
     queryFn: getAccessContext,
     staleTime: 60_000,
     retry: false,
   });
+  const sourceCheckKey = context.data && context.data.auth_mode !== "anonymous" && context.data.source_configured !== false
+    ? `${accessScope}:${context.data.source_id ?? "unconfigured"}`
+    : null;
+  const sourceCheckReady = sourceCheckReadyFor === sourceCheckKey;
   const connector = useQuery({
     queryKey: ["connector-status", accessScope],
     queryFn: getConnectorStatus,
     staleTime: 60_000,
     retry: false,
-    enabled: Boolean(
+    enabled: sourceCheckReady && Boolean(
       context.data &&
       context.data.auth_mode !== "anonymous" &&
       context.data.source_configured !== false,
     ),
   });
+  useEffect(() => {
+    if (!sourceCheckKey) return;
+    const timer = window.setTimeout(() => setSourceCheckReadyFor(sourceCheckKey), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [sourceCheckKey]);
   if (context.isLoading) return <div className="hidden items-center gap-2 text-xs text-[#788091] sm:flex"><span className="h-2 w-2 rounded-full bg-[#c8ccd5]" /> Checking workspace…</div>;
   if (context.isError) return <div className="hidden items-center gap-2 text-xs text-[#bd3446] sm:flex"><CircleAlert size={14} /> Workspace status unavailable</div>;
   const source = context.data?.source_id ?? "demo";
   if (context.data?.auth_mode === "anonymous") return <div className="hidden items-center gap-2 text-xs text-[#788091] sm:flex"><span className="h-2 w-2 rounded-full bg-[#21a273]" /> Demo dataset connected</div>;
   if (context.data?.source_configured === false) return <div className="hidden items-center gap-2 text-xs text-[#9b6017] sm:flex"><span className="h-2 w-2 rounded-full bg-[#d28124]" /> {context.data?.role ?? "workspace"} · source unconfigured</div>;
+  if (!sourceCheckReady) return <div className="hidden items-center gap-2 text-xs text-[#788091] sm:flex"><span className="h-2 w-2 rounded-full bg-[#c8ccd5]" /> {context.data?.role ?? "workspace"} · warming {source}</div>;
   if (connector.isLoading) return <div className="hidden items-center gap-2 text-xs text-[#788091] sm:flex"><span className="h-2 w-2 rounded-full bg-[#d28124]" /> {context.data?.role ?? "workspace"} · checking {source}</div>;
   if (connector.isError || !connector.data?.source.healthy) return <div className="hidden items-center gap-2 text-xs text-[#bd3446] sm:flex"><CircleAlert size={14} /> {context.data?.role ?? "workspace"} · {source} unavailable</div>;
   return <div className="hidden items-center gap-2 text-xs text-[#788091] sm:flex"><span className="h-2 w-2 rounded-full bg-[#21a273]" /> {context.data?.role ?? "workspace"} · {source} connected</div>;

@@ -26,7 +26,7 @@ It is deliberately not a generic chatbot or unrestricted text-to-SQL wrapper.
 - Optional Supabase Auth email/password sign-in, refresh, logout, and anonymous fallback
 - Server-side workspace-to-source routing with tenant-isolated history, cache, reports, and Copilot execution
 - Read-only PostgreSQL connector with governed view/column contract, health checks, timeouts, and dataset fingerprints
-- Fast refresh path with bounded tenant/source engine reuse, short-lived fingerprints, in-process result reuse, and grouped 90-day overview trends
+- Fast first-paint and refresh path with a critical KPI summary, deferred overview details, bounded tenant/source engine reuse, short-lived fingerprints, in-process result reuse, a daily-activity MAU rollup, and grouped 90-day trends
 - Bounded SSE analytics snapshots with heartbeats, event IDs, fingerprint updates, and automatic browser reconnects
 - Typed Planner → Analyst → Evidence Copilot orchestration with fixed capabilities and deterministic fallback
 - Explainable anomaly detection, Product Pulse, deterministic weekly reports, and Markdown export

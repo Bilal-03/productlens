@@ -2,7 +2,8 @@ from datetime import date
 from typing import Any
 
 from app.analytics.service import AnalyticsService
-from app.models.contracts import AnalyticsRequest
+from app.database.service import DatabaseUnavailable
+from app.models.contracts import AnalyticsRequest, OverviewRequest
 
 
 def test_overview_trend_uses_one_grouped_series_query_and_keeps_weekly_shape() -> None:
@@ -33,3 +34,37 @@ def test_overview_trend_uses_one_grouped_series_query_and_keeps_weekly_shape() -
         "denominator": 6.0,
     }
     assert result["sql"] == ["SELECT grouped_series"]
+
+
+def test_overview_summary_skips_comparisons_and_returns_partial_kpis() -> None:
+    service = AnalyticsService(object(), object())  # type: ignore[arg-type]
+    service.database = type("Database", (), {"dataset_version": lambda self: None})()  # type: ignore[assignment]
+    calls: list[tuple[str, bool, bool]] = []
+
+    def metric(
+        request: AnalyticsRequest,
+        *,
+        use_cache: bool,
+        include_comparison: bool,
+        use_daily_activity_rollup: bool,
+    ) -> dict[str, Any]:
+        calls.append((request.metric, use_cache, include_comparison))
+        assert use_daily_activity_rollup is True
+        if request.metric == "d30_retention":
+            raise DatabaseUnavailable("retention timeout")
+        return {
+            "metric": {"label": request.metric, "format": "integer"},
+            "current_period": {"label": "Last 30 Days"},
+            "current": [{"value": 10}],
+            "previous": [],
+        }
+
+    service.metric = metric  # type: ignore[method-assign]
+    service._dataset_as_of = lambda: date(2026, 8, 24)  # type: ignore[method-assign]
+
+    result = service.overview_summary(OverviewRequest(period="last_30_days"))
+
+    assert set(result["kpis"]) == {"mau", "activation_rate", "checkout_conversion", "mrr", "churn_rate"}
+    assert result["warnings"] == ["d30_retention: unavailable"]
+    assert {use_cache for _, use_cache, _ in calls} == {False}
+    assert {include_comparison for _, _, include_comparison in calls} == {False}

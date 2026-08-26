@@ -390,6 +390,17 @@ class OverviewRequest(BaseModel):
     period: str = "last_30_days"
 
 
+class OverviewSummaryResponse(BaseModel):
+    """Critical-path overview data used for the first dashboard paint."""
+
+    type: Literal["overview_summary"] = "overview_summary"
+    period: DateRange
+    comparison_period: DateRange | None = None
+    dataset_as_of: date
+    kpis: dict[str, dict[str, Any]]
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FeatureAdoptionRow(BaseModel):
     feature: str
     eligible_users: float

@@ -714,6 +714,8 @@ def compile_metric(
     period: DateRange,
     dimension: str | None = None,
     filters: list[Filter] | None = None,
+    *,
+    use_daily_activity_rollup: bool = False,
 ) -> SQLProposal:
     definition = registry.metric(metric_name)
     registry.validate_dimension(metric_name, dimension)
@@ -729,6 +731,28 @@ def compile_metric(
         return compile_retention_window(metric_name, period, dimension, filters)
     if compiler == "feature_adoption":
         return compile_feature_adoption(period, dimension or "feature", filters)
+    if (
+        use_daily_activity_rollup
+        and compiler == "active_users"
+        and metric_name == "mau"
+        and dimension is None
+        and not filters
+    ):
+        query = f"""
+        SELECT 'All'::text AS segment,
+          COUNT(DISTINCT user_id)::float AS numerator,
+          COUNT(DISTINCT user_id)::float AS denominator,
+          COUNT(DISTINCT user_id)::float AS value
+        FROM analytics.daily_activity
+        WHERE {period_sql(period, 'activity_date')}
+        """
+        return SQLProposal(
+            query=query.strip(),
+            purpose=f"Calculate {definition.label} from the governed daily activity rollup for {period.label}",
+            tables_used=["daily_activity"],
+            metrics_used=[metric_name],
+            assumptions=["Qualifying activity is pre-aggregated to one UTC row per user-day", "The period end is exclusive"],
+        )
 
     if compiler == "event_conversion":
         query = f"""
