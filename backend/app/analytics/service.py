@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from typing import Any
 
 from app.analytics.sql_compiler import (
@@ -236,19 +238,41 @@ class AnalyticsService:
         comparison_period = default_comparison(request.period)
         kpi_period = request.period
         kpi_names = ["mau", "activation_rate", "checkout_conversion", "mrr", "d30_retention", "churn_rate"]
-        kpis: dict[str, dict[str, Any]] = {}
-        for metric_name in kpi_names:
-            metric_period = "last_90_days" if metric_name == "d30_retention" else kpi_period
-            kpis[metric_name] = self.metric(AnalyticsRequest(metric=metric_name, period=metric_period))
-        acquisition = AcquisitionAnalyticsResponse.model_validate(
-            self.acquisition(AcquisitionRequest(period=kpi_period, dimension="channel"))
-        )
-        activation_funnel = self.funnel(FunnelRequest(funnel="onboarding", period=kpi_period))
-        retention_snapshot = RetentionAnalyticsResponse.model_validate(
-            self.retention(RetentionRequest(period="last_90_days", windows=[1, 7, 30]))
-        )
-        revenue_trend = self.trend(AnalyticsRequest(metric="revenue", period="last_90_days"))
-        user_growth_trend = self.trend(AnalyticsRequest(metric="signups", period="last_90_days"))
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            kpi_jobs = {
+                metric_name: executor.submit(
+                    self.metric,
+                    AnalyticsRequest(
+                        metric=metric_name,
+                        period="last_90_days" if metric_name == "d30_retention" else kpi_period,
+                    ),
+                )
+                for metric_name in kpi_names
+            }
+            acquisition_job = executor.submit(
+                self.acquisition,
+                AcquisitionRequest(period=kpi_period, dimension="channel"),
+            )
+            funnel_job = executor.submit(self.funnel, FunnelRequest(funnel="onboarding", period=kpi_period))
+            retention_job = executor.submit(
+                self.retention,
+                RetentionRequest(period="last_90_days", windows=[1, 7, 30]),
+            )
+            revenue_trend_job = executor.submit(
+                self.trend,
+                AnalyticsRequest(metric="revenue", period="last_90_days"),
+            )
+            user_growth_trend_job = executor.submit(
+                self.trend,
+                AnalyticsRequest(metric="signups", period="last_90_days"),
+            )
+
+            kpis = {metric_name: kpi_jobs[metric_name].result() for metric_name in kpi_names}
+            acquisition = AcquisitionAnalyticsResponse.model_validate(acquisition_job.result())
+            activation_funnel = funnel_job.result()
+            retention_snapshot = RetentionAnalyticsResponse.model_validate(retention_job.result())
+            revenue_trend = revenue_trend_job.result()
+            user_growth_trend = user_growth_trend_job.result()
         payload = OverviewAnalyticsResponse(
             period=period,
             comparison_period=comparison_period,
@@ -317,28 +341,35 @@ class AnalyticsService:
         period = resolve_period(request.period)
         duration = (period.end - period.start).days
         step = 7 if duration > 45 else 1
-        points: list[dict[str, Any]] = []
-        sql_fragments: list[str] = []
-        execution_ms = 0.0
+        buckets: list[tuple[date, date]] = []
         cursor = period.start
         while cursor < period.end:
             bucket_end = min(cursor.fromordinal(cursor.toordinal() + step), period.end)
-            proposal_period = type(period)(start=cursor, end=bucket_end, label=cursor.isoformat())
+            buckets.append((cursor, bucket_end))
+            cursor = bucket_end
+
+        def run_bucket(bucket: tuple[date, date]) -> tuple[dict[str, Any], str, float]:
+            bucket_start, bucket_end = bucket
+            proposal_period = type(period)(start=bucket_start, end=bucket_end, label=bucket_start.isoformat())
             rows, sql, elapsed = self.execute(
                 compile_metric(request.metric, proposal_period, request.dimension, request.filters)
             )
             row = rows[0] if rows else {"value": 0, "numerator": 0, "denominator": 0}
-            points.append(
-                {
-                    "label": cursor.isoformat(),
-                    "value": float(row.get("value") or 0),
-                    "numerator": float(row.get("numerator") or 0),
-                    "denominator": float(row.get("denominator") or 0),
-                }
-            )
-            sql_fragments.append(sql)
-            execution_ms += elapsed
-            cursor = bucket_end
+            point = {
+                "label": bucket_start.isoformat(),
+                "value": float(row.get("value") or 0),
+                "numerator": float(row.get("numerator") or 0),
+                "denominator": float(row.get("denominator") or 0),
+            }
+            return point, sql, elapsed
+
+        with ThreadPoolExecutor(max_workers=min(4, len(buckets))) as executor:
+            jobs = [executor.submit(run_bucket, bucket) for bucket in buckets]
+            results = [job.result() for job in jobs]
+
+        points = [result[0] for result in results]
+        sql_fragments = [result[1] for result in results]
+        execution_ms = sum(result[2] for result in results)
         return {
             "metric": registry.metric(request.metric).model_dump(),
             "period": period.model_dump(),

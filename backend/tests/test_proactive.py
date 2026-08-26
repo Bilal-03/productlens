@@ -156,7 +156,7 @@ def test_product_pulse_can_surface_a_governed_segment_episode() -> None:
 
 
 def test_weekly_report_has_all_sections_and_markdown_export() -> None:
-    proactive, _ = service()
+    proactive, database = service()
     report = proactive.weekly_report()
     assert report.type == "weekly_report"
     assert [section.key for section in report.sections] == [
@@ -173,6 +173,10 @@ def test_weekly_report_has_all_sections_and_markdown_export() -> None:
     assert "## Growth" in markdown
     assert "## Anomalies" in markdown
     assert "## Methodology" in markdown
+    calls_after_first = database.calls
+    cached_report = proactive.weekly_report()
+    assert cached_report.model_dump(mode="json") == report.model_dump(mode="json")
+    assert database.calls == calls_after_first
 
 
 def test_weekly_report_provider_failure_falls_back_to_deterministic_prose() -> None:
@@ -201,3 +205,24 @@ def test_weekly_report_rejects_ungrounded_provider_numbers() -> None:
     assert router.calls == 1
     assert report.metadata.provider == "deterministic-grounding-fallback"
     assert "999999" not in report.headline
+
+
+def test_weekly_report_skips_provider_when_response_budget_is_low() -> None:
+    router = NarrativeRouter(
+        response=GroundedInsight(
+            headline="Provider headline",
+            summary="Provider summary.",
+            findings=[],
+            recommendations=[],
+            follow_up_questions=["What changed?", "Where did it change?"],
+            caveats=[],
+        )
+    )
+    proactive = ProactiveAnalyticsService(FakeDatabase(), SQLValidator(), InsightService(router))
+    proactive.REPORT_PROVIDER_RESERVE_MS = 60_000
+
+    report = proactive.weekly_report()
+
+    assert router.calls == 0
+    assert report.metadata.provider == "deterministic-budget-fallback"
+    assert any("provider prose was skipped" in warning for warning in report.warnings)

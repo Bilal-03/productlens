@@ -71,10 +71,20 @@ def copilot_pipeline() -> CopilotPipeline:
 
 @lru_cache
 def proactive_service() -> ProactiveAnalyticsService:
+    settings = get_settings()
+    report_provider_timeout = settings.report_provider_timeout_ms / 1000 if settings.report_provider_timeout_ms > 0 else None
     return ProactiveAnalyticsService(
         database_service(),
         sql_validator(),
-        InsightService(ProviderRouter(get_settings())),
+        InsightService(
+            ProviderRouter(
+                settings,
+                timeout_seconds=report_provider_timeout,
+                max_attempts=1,
+            )
+        ),
+        report_budget_ms=settings.proactive_report_budget_ms,
+        report_provider_timeout_ms=settings.report_provider_timeout_ms,
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -85,6 +86,10 @@ class ProactiveAnalyticsService:
         ("retention", "Retention", ("weekly_retention",)),
         ("revenue", "Revenue", ("revenue", "mrr")),
     )
+    QUERY_WORKERS = 4
+    REPORT_BUDGET_MS = 45_000
+    REPORT_PROVIDER_TIMEOUT_MS = 2_500
+    REPORT_PROVIDER_RESERVE_MS = 3_000
 
     def __init__(
         self,
@@ -92,11 +97,16 @@ class ProactiveAnalyticsService:
         validator: SQLValidator,
         insights: InsightService | None = None,
         policy: AnomalyPolicy | None = None,
+        *,
+        report_budget_ms: int = REPORT_BUDGET_MS,
+        report_provider_timeout_ms: int = REPORT_PROVIDER_TIMEOUT_MS,
     ) -> None:
         self.database = database
         self.validator = validator
         self.insights = insights
         self.policy = policy or AnomalyPolicy()
+        self.report_budget_ms = max(5_000, min(report_budget_ms, 60_000))
+        self.report_provider_timeout_ms = max(0, min(report_provider_timeout_ms, 10_000))
 
     def anomalies(self, period_name: str = "last_30_days", limit: int = 50) -> AnomaliesResponse:
         period = self._resolve_public_period(period_name)
@@ -172,10 +182,25 @@ class ProactiveAnalyticsService:
                 return WeeklyReportResponse.model_validate(cached)
 
         started = time.perf_counter()
+        deadline = started + (self.report_budget_ms / 1000)
         anomalies, evidence, methodology, anomaly_sql, warnings, _ = self._build_anomalies(period, 10)
-        anomalies, driver_evidence, driver_queries, driver_tables, driver_warnings = self._enrich_records(anomalies[:5])
-        warnings.extend(driver_warnings)
-        evidence.extend(driver_evidence)
+        driver_records = anomalies[:3]
+        if driver_records and self._remaining_ms(deadline) >= 12_000:
+            enriched_records, driver_evidence, driver_queries, driver_tables, driver_warnings = self._enrich_records(
+                driver_records,
+                max_dimensions=1,
+            )
+            by_id = {record.id: record for record in enriched_records}
+            anomalies = [by_id.get(record.id, record) for record in anomalies]
+            warnings.extend(driver_warnings)
+            evidence.extend(driver_evidence)
+        elif driver_records:
+            warnings.append("Segment drivers were omitted to keep the report within its response budget.")
+            driver_queries = 0
+            driver_tables = []
+        else:
+            driver_queries = 0
+            driver_tables = []
 
         sections: list[ReportSection] = []
         report_evidence: list[Evidence] = []
@@ -183,51 +208,58 @@ class ProactiveAnalyticsService:
         report_metrics = set(anomaly_sql.metrics)
         report_queries = anomaly_sql.query_count + driver_queries
         successful_report_queries = 0
-        for key, title, metrics in self.REPORT_METRICS:
-            section_metrics: list[ReportMetric] = []
-            section_evidence: list[Evidence] = []
-            section_warnings: list[str] = []
-            for metric in metrics:
-                try:
-                    report_metric, metric_evidence, query_count, tables = self._report_metric(
+        report_jobs: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=self.QUERY_WORKERS) as executor:
+            for _, _, metrics in self.REPORT_METRICS:
+                for metric in metrics:
+                    report_jobs[metric] = executor.submit(
+                        self._report_metric,
                         metric,
                         period if metric != "weekly_retention" else resolve_period("last_90_days"),
                         comparison_period if metric != "weekly_retention" else default_comparison("last_90_days"),
                     )
-                    section_metrics.append(report_metric)
-                    if metric_evidence:
-                        section_evidence.append(metric_evidence)
-                    successful_report_queries += query_count
-                    report_queries += query_count
-                    report_tables.update(tables)
-                    report_metrics.add(metric)
-                except DatabaseUnavailable:
-                    section_warnings.append(f"{metric} was unavailable while this report was generated.")
-                except ValueError as exc:
-                    section_warnings.append(str(exc))
-            if section_warnings:
-                warnings.extend(section_warnings)
-            report_evidence.extend(section_evidence)
-            summary = self._section_summary(title, section_metrics)
-            sections.append(
-                ReportSection(
-                    key=key,
-                    title=title,
-                    summary=summary,
-                    metrics=section_metrics,
-                    findings=(
-                        [
-                            Finding(
-                                kind="observed",
-                                text=summary,
-                                evidence_ids=[item.id for item in section_evidence],
-                            )
-                        ]
-                        if section_evidence
-                        else []
-                    ),
+
+            for key, title, metrics in self.REPORT_METRICS:
+                section_metrics: list[ReportMetric] = []
+                section_evidence: list[Evidence] = []
+                section_warnings: list[str] = []
+                for metric in metrics:
+                    try:
+                        report_metric, metric_evidence, query_count, tables = report_jobs[metric].result()
+                        section_metrics.append(report_metric)
+                        if metric_evidence:
+                            section_evidence.append(metric_evidence)
+                        successful_report_queries += query_count
+                        report_queries += query_count
+                        report_tables.update(tables)
+                        report_metrics.add(metric)
+                    except DatabaseUnavailable:
+                        section_warnings.append(f"{metric} was unavailable while this report was generated.")
+                    except ValueError as exc:
+                        section_warnings.append(str(exc))
+                if section_warnings:
+                    warnings.extend(section_warnings)
+                report_evidence.extend(section_evidence)
+                summary = self._section_summary(title, section_metrics)
+                sections.append(
+                    ReportSection(
+                        key=key,
+                        title=title,
+                        summary=summary,
+                        metrics=section_metrics,
+                        findings=(
+                            [
+                                Finding(
+                                    kind="observed",
+                                    text=summary,
+                                    evidence_ids=[item.id for item in section_evidence],
+                                )
+                            ]
+                            if section_evidence
+                            else []
+                        ),
+                    )
                 )
-            )
 
         if successful_report_queries == 0 and anomaly_sql.query_count == 0:
             raise DatabaseUnavailable("The proactive analytics database is unavailable")
@@ -236,7 +268,11 @@ class ProactiveAnalyticsService:
         drivers = [driver for anomaly in anomalies for driver in anomaly.drivers][:10]
         recommendations = self._recommendations(anomalies)
         deterministic = self._deterministic_report_insight(sections, anomalies, recommendations, evidence)
-        narrative, provider, _ = self._interpret_report(deterministic, evidence, period)
+        if self.report_provider_timeout_ms > 0 and self._remaining_ms(deadline) >= self.REPORT_PROVIDER_RESERVE_MS:
+            narrative, provider, _ = self._interpret_report(deterministic, evidence, period)
+        else:
+            narrative, provider = deterministic, "deterministic-budget-fallback"
+            warnings.append("Optional provider prose was skipped to keep the report within its response budget.")
         caveats = [
             "Signals use daily UTC buckets and a 28-day rolling baseline.",
             "Anomalies identify unusual movement and do not establish causation.",
@@ -365,36 +401,74 @@ class ProactiveAnalyticsService:
         warnings: list[str] = []
         query_count = 0
         database_error: DatabaseUnavailable | None = None
-        for metric in self.SERIES_METRICS:
-            definition = registry.metric(metric)
-            try:
-                proposal = compile_metric_series(metric, series_period)
-                rows, _, _, query_tables = self._execute(proposal.query)
-                query_count += 1
-                tables.update(query_tables)
-                metrics.add(metric)
-                points = self._complete_points(rows, series_period, definition.kind)
-                candidates = detect_anomalies(
-                    points,
-                    metric=metric,
-                    kind=definition.kind,
-                    policy=self.policy,
-                )
-                if not candidates and metric in self.DIMENSION_SERIES_METRICS:
-                    segment_candidates, segment_queries, segment_tables = self._segment_candidates(
+        primary_candidates: dict[str, list[AnomalyCandidate]] = {}
+        successful_metrics: set[str] = set()
+
+        def run_series(metric: str) -> tuple[list[dict[str, Any]], list[str]]:
+            proposal = compile_metric_series(metric, series_period)
+            rows, _, _, query_tables = self._execute(proposal.query)
+            return rows, query_tables
+
+        with ThreadPoolExecutor(max_workers=self.QUERY_WORKERS) as executor:
+            series_jobs = {metric: executor.submit(run_series, metric) for metric in self.SERIES_METRICS}
+            for metric in self.SERIES_METRICS:
+                definition = registry.metric(metric)
+                try:
+                    rows, query_tables = series_jobs[metric].result()
+                    query_count += 1
+                    tables.update(query_tables)
+                    metrics.add(metric)
+                    successful_metrics.add(metric)
+                    points = self._complete_points(rows, series_period, definition.kind)
+                    primary_candidates[metric] = detect_anomalies(
+                        points,
+                        metric=metric,
+                        kind=definition.kind,
+                        policy=self.policy,
+                    )
+                except DatabaseUnavailable as exc:
+                    database_error = database_error or exc
+                    warnings.append(f"{definition.label} was unavailable while signals were calculated.")
+                except ValueError as exc:
+                    warnings.append(str(exc))
+
+        fallback_metrics = [
+            metric
+            for metric in self.SERIES_METRICS
+            if metric in successful_metrics
+            and not primary_candidates.get(metric)
+            and metric in self.DIMENSION_SERIES_METRICS
+        ]
+        fallback_results: dict[str, tuple[list[AnomalyCandidate], int, set[str]]] = {}
+        if fallback_metrics:
+            with ThreadPoolExecutor(max_workers=min(self.QUERY_WORKERS, len(fallback_metrics))) as executor:
+                segment_jobs = {
+                    metric: executor.submit(
+                        self._segment_candidates,
                         metric,
                         series_period,
-                        definition.kind,
+                        registry.metric(metric).kind,
                     )
-                    candidates.extend(segment_candidates)
-                    query_count += segment_queries
-                    tables.update(segment_tables)
-                all_episodes.extend(collapse_anomaly_runs(candidates))
-            except DatabaseUnavailable as exc:
-                database_error = database_error or exc
-                warnings.append(f"{definition.label} was unavailable while signals were calculated.")
-            except ValueError as exc:
-                warnings.append(str(exc))
+                    for metric in fallback_metrics
+                }
+                for metric in fallback_metrics:
+                    definition = registry.metric(metric)
+                    try:
+                        fallback_results[metric] = segment_jobs[metric].result()
+                    except DatabaseUnavailable:
+                        warnings.append(f"{definition.label} segment signals were unavailable while signals were calculated.")
+                    except ValueError as exc:
+                        warnings.append(str(exc))
+
+        for metric in self.SERIES_METRICS:
+            candidates = list(primary_candidates.get(metric, []))
+            fallback = fallback_results.get(metric)
+            if fallback:
+                segment_candidates, segment_queries, segment_tables = fallback
+                candidates.extend(segment_candidates)
+                query_count += segment_queries
+                tables.update(segment_tables)
+            all_episodes.extend(collapse_anomaly_runs(candidates))
         if query_count == 0 and database_error is not None:
             raise database_error
 
@@ -475,31 +549,41 @@ class ProactiveAnalyticsService:
     def _enrich_records(
         self,
         records: list[AnomalyRecord],
+        *,
+        max_dimensions: int = 2,
     ) -> tuple[list[AnomalyRecord], list[Evidence], int, list[str], list[str]]:
-        enriched: list[AnomalyRecord] = []
-        evidence: list[Evidence] = []
-        query_count = 0
-        tables: set[str] = set()
-        warnings: list[str] = []
-        for record in records:
-            drivers, driver_evidence, queries, driver_tables, driver_warnings = self._drivers_for_record(record)
-            query_count += queries
-            tables.update(driver_tables)
-            warnings.extend(driver_warnings)
-            evidence.extend(driver_evidence)
-            enriched.append(
-                record.model_copy(
-                    update={
-                        "drivers": drivers,
-                        "evidence_ids": [record.evidence_ids[0], *[item.id for item in driver_evidence]],
-                    }
-                )
+        if not records:
+            return [], [], 0, [], []
+
+        def enrich(record: AnomalyRecord) -> tuple[AnomalyRecord, list[Evidence], int, list[str], list[str]]:
+            drivers, driver_evidence, queries, driver_tables, driver_warnings = self._drivers_for_record(
+                record,
+                max_dimensions=max_dimensions,
             )
-        return enriched, evidence, query_count, sorted(tables), warnings
+            enriched_record = record.model_copy(
+                update={
+                    "drivers": drivers,
+                    "evidence_ids": [record.evidence_ids[0], *[item.id for item in driver_evidence]],
+                }
+            )
+            return enriched_record, driver_evidence, queries, driver_tables, driver_warnings
+
+        with ThreadPoolExecutor(max_workers=min(self.QUERY_WORKERS, len(records))) as executor:
+            jobs = [executor.submit(enrich, record) for record in records]
+            results = [job.result() for job in jobs]
+
+        enriched = [result[0] for result in results]
+        evidence = [item for result in results for item in result[1]]
+        query_count = sum(result[2] for result in results)
+        tables = sorted({table for result in results for table in result[3]})
+        warnings = [warning for result in results for warning in result[4]]
+        return enriched, evidence, query_count, tables, warnings
 
     def _drivers_for_record(
         self,
         record: AnomalyRecord,
+        *,
+        max_dimensions: int = 2,
     ) -> tuple[list[Driver], list[Evidence], int, list[str], list[str]]:
         duration = record.period.end - record.period.start
         if duration.days <= 0:
@@ -515,7 +599,7 @@ class ProactiveAnalyticsService:
         query_count = 0
         tables: set[str] = set()
         warnings: list[str] = []
-        for dimension in self.DRIVER_DIMENSIONS.get(record.metric, ())[:2]:
+        for dimension in self.DRIVER_DIMENSIONS.get(record.metric, ())[: max(1, min(max_dimensions, 2))]:
             try:
                 current_rows, _, _, current_tables = self._execute(
                     compile_metric(record.metric, record.period, dimension).query
@@ -740,13 +824,14 @@ class ProactiveAnalyticsService:
         evidence: list[Evidence],
         period: DateRange,
     ) -> tuple[GroundedInsight, str, bool]:
-        if self.insights is None:
+        if self.insights is None or self.report_provider_timeout_ms <= 0:
             return deterministic, "deterministic", True
         return self.insights.interpret(
             question=f"Prepare the weekly product report for {period.label}.",
             metric_label="Weekly Product Report",
             evidence=evidence[:40],
             deterministic=deterministic,
+            provider_timeout_ms=self.report_provider_timeout_ms,
         )
 
     def _record_from_candidate(
@@ -902,6 +987,10 @@ class ProactiveAnalyticsService:
             separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _remaining_ms(deadline: float) -> float:
+        return max(0.0, (deadline - time.perf_counter()) * 1000)
 
     @staticmethod
     def _recommendations(anomalies: list[AnomalyRecord]) -> list[Recommendation]:

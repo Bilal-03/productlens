@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     result_cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)
     query_timeout_ms: int = Field(default=5000, ge=100, le=60_000)
     max_query_rows: int = Field(default=5000, ge=1, le=50_000)
+    proactive_report_budget_ms: int = Field(default=45_000, ge=5_000, le=60_000)
+    report_provider_timeout_ms: int = Field(default=2_500, ge=0, le=10_000)
 
 
 @lru_cache

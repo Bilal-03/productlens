@@ -44,6 +44,25 @@ class UsageProvider(SuccessfulProvider):
         return result
 
 
+class TimeoutAwareProvider(LLMProvider):
+    name = "gemini"
+
+    def __init__(self) -> None:
+        self.timeout_seconds: float | None = None
+
+    def complete_structured(
+        self,
+        response_model: type[TModel],
+        system: str,
+        user: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> TModel:
+        del system, user
+        self.timeout_seconds = timeout_seconds
+        return response_model.model_validate({"value": 9})
+
+
 def router_with_providers(*providers: LLMProvider) -> ProviderRouter:
     router = ProviderRouter(Settings(gemini_api_key=None, groq_api_key=None))
     router.providers = list(providers)
@@ -88,3 +107,20 @@ def test_provider_router_exposes_non_sensitive_usage_metadata() -> None:
     assert router.last_usage.model == "test-model"
     assert router.last_usage.input_tokens == 11
     assert router.last_usage.output_tokens == 7
+
+
+def test_provider_router_supports_one_bounded_attempt() -> None:
+    provider = TimeoutAwareProvider()
+    router = router_with_providers(provider)
+
+    result, trace = router.complete_structured_with_timeout(
+        Completion,
+        "system",
+        "user",
+        timeout_seconds=0.25,
+        max_attempts=1,
+    )
+
+    assert result.value == 9
+    assert trace == "gemini"
+    assert provider.timeout_seconds == 0.25

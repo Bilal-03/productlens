@@ -30,6 +30,7 @@ class InsightService:
         metric_label: str,
         evidence: list[Evidence],
         deterministic: GroundedInsight,
+        provider_timeout_ms: int | None = None,
     ) -> tuple[GroundedInsight, str, bool]:
         self.last_usage = None
         if not self.router.available:
@@ -42,7 +43,17 @@ class InsightService:
         )
         payload = json.dumps({"question": question, "metric": metric_label, "evidence": [item.model_dump() for item in evidence]})
         try:
-            candidate, provider = self.router.complete_structured(GroundedInsight, system, payload)
+            bounded_completion = getattr(self.router, "complete_structured_with_timeout", None)
+            if provider_timeout_ms is not None and provider_timeout_ms > 0 and callable(bounded_completion):
+                candidate, provider = bounded_completion(
+                    GroundedInsight,
+                    system,
+                    payload,
+                    timeout_seconds=provider_timeout_ms / 1000,
+                    max_attempts=1,
+                )
+            else:
+                candidate, provider = self.router.complete_structured(GroundedInsight, system, payload)
             self.last_usage = getattr(self.router, "last_usage", None)
         except ProviderError:
             self.last_usage = None
