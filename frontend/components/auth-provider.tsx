@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { setAccessToken } from "@/lib/api";
+import { getAccessToken, setAccessToken } from "@/lib/api";
 import { createSupabaseAuthClient, type AuthSession, type AuthUser, SupabaseAuthClient } from "@/lib/supabase";
 
 type AuthContextValue = {
@@ -31,7 +31,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let active = true;
-    const lastToken = { value: null as string | null };
+    // The API helper can synchronously read the same Supabase session from
+    // localStorage. Start with that value so session hydration does not clear
+    // and refetch an already correctly authenticated query tree.
+    const lastToken = { value: getAccessToken() };
     const applySession = (next: AuthSession | null) => {
       const accessToken = next?.access_token ?? null;
       if (lastToken.value !== accessToken) {

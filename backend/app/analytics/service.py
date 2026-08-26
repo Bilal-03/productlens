@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from app.analytics.sql_compiler import (
     compile_acquisition,
     compile_funnel,
     compile_metric,
+    compile_metric_series,
     compile_retention_curve,
 )
 from app.analytics.time_ranges import default_comparison, resolve_period, source_as_of
@@ -19,6 +20,7 @@ from app.models.contracts import (
     AcquisitionRequest,
     AcquisitionSegment,
     AnalyticsRequest,
+    DateRange,
     FeatureAdoptionAnalyticsResponse,
     FeatureAdoptionRow,
     FunnelRequest,
@@ -348,6 +350,8 @@ class AnalyticsService:
     def trend(self, request: AnalyticsRequest) -> dict[str, Any]:
         as_of = self._dataset_as_of()
         period = resolve_period(request.period, as_of)
+        if request.metric in {"revenue", "signups"} and request.dimension is None and not request.filters:
+            return self._series_trend(request, period, as_of)
         duration = (period.end - period.start).days
         step = 7 if duration > 45 else 1
         buckets: list[tuple[date, date]] = []
@@ -386,6 +390,57 @@ class AnalyticsService:
             "dimension": request.dimension,
             "points": points,
             "sql": sql_fragments,
+            "execution_ms": execution_ms,
+        }
+
+    def _series_trend(self, request: AnalyticsRequest, period: DateRange, as_of: date) -> dict[str, Any]:
+        """Build the overview trend from one bounded grouped query.
+
+        The previous implementation issued one query per weekly bucket. The
+        governed daily-series compiler already returns the same additive
+        revenue/signup facts in one read-only statement, so aggregate those
+        daily rows in memory into the existing weekly response shape.
+        """
+
+        proposal = compile_metric_series(request.metric, period)
+        rows, sql, execution_ms = self.execute(proposal)
+        daily: dict[date, dict[str, Any]] = {}
+        for row in rows:
+            bucket_value = row.get("bucket")
+            if isinstance(bucket_value, datetime):
+                bucket = bucket_value.date()
+            elif isinstance(bucket_value, date):
+                bucket = bucket_value
+            elif bucket_value is not None:
+                bucket = date.fromisoformat(str(bucket_value)[:10])
+            else:
+                continue
+            daily[bucket] = row
+
+        duration = (period.end - period.start).days
+        step = 7 if duration > 45 else 1
+        points: list[dict[str, Any]] = []
+        cursor = period.start
+        while cursor < period.end:
+            bucket_end = min(cursor.fromordinal(cursor.toordinal() + step), period.end)
+            bucket_rows = [row for day, row in daily.items() if cursor <= day < bucket_end]
+            points.append(
+                {
+                    "label": cursor.isoformat(),
+                    "value": sum(float(row.get("value") or 0) for row in bucket_rows),
+                    "numerator": sum(float(row.get("numerator") or 0) for row in bucket_rows),
+                    "denominator": sum(float(row.get("denominator") or 0) for row in bucket_rows),
+                }
+            )
+            cursor = bucket_end
+
+        return {
+            "metric": registry.metric(request.metric).model_dump(),
+            "period": period.model_dump(),
+            "dataset_as_of": as_of.isoformat(),
+            "dimension": request.dimension,
+            "points": points,
+            "sql": [sql],
             "execution_ms": execution_ms,
         }
 

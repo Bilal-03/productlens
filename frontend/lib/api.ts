@@ -2,6 +2,7 @@ import type { AccessContextResponse, AdvancedAnalyticsResponse, ConnectorStatusR
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 const ACCESS_TOKEN_KEY = "productlens-access-token";
+const SUPABASE_SESSION_KEY = "productlens-supabase-session";
 
 export function getSessionId(): string {
   if (typeof window === "undefined") return "server-render-session-id-placeholder";
@@ -20,7 +21,24 @@ export function setAccessToken(token: string | null) {
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  const explicitToken = window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  if (explicitToken) return explicitToken;
+
+  // Supabase persists its short-lived session before AuthProvider's effect
+  // hydrates. Reusing only a valid JWT here prevents the first authenticated
+  // page request from racing ahead as anonymous demo traffic on refresh.
+  try {
+    const rawSession = window.localStorage.getItem(SUPABASE_SESSION_KEY);
+    if (!rawSession) return null;
+    const session = JSON.parse(rawSession) as { access_token?: unknown; expires_at?: unknown };
+    if (typeof session.access_token !== "string" || !session.access_token) return null;
+    if (typeof session.expires_at === "number" && session.expires_at <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return session.access_token;
+  } catch {
+    return null;
+  }
 }
 
 export function getAccessHeaders(): Record<string, string> {

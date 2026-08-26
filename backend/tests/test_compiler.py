@@ -9,6 +9,7 @@ from app.analytics.sql_compiler import (
     compile_funnel,
     compile_journeys,
     compile_metric,
+    compile_metric_series,
     compile_retention_curve,
     compile_revenue_cohorts,
     compile_stickiness,
@@ -163,6 +164,17 @@ def test_payment_failures_metric_is_governed_by_checkout_sessions() -> None:
     assert "payment_failed" in proposal.query
     assert "checkout_started" in proposal.query
     assert "COUNT(*) FILTER (WHERE failed)" in proposal.query
+
+
+@pytest.mark.parametrize("metric", ["revenue", "signups"])
+def test_overview_additive_trends_use_one_bounded_daily_query(metric: str) -> None:
+    proposal = compile_metric_series(metric, resolve_period("last_90_days"))
+    validation = SQLValidator().validate(proposal.query)
+
+    assert validation.valid, validation.errors
+    assert "date_trunc('day'" in proposal.query
+    assert "GROUP BY 1" in proposal.query
+    assert proposal.tables_used
 
 
 def test_experiment_and_advanced_compilers_are_bounded_and_allowlisted() -> None:

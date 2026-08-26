@@ -7,7 +7,7 @@ import { Activity, BarChart3, BookOpen, Bookmark, BrainCircuit, ChevronDown, Cir
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/components/ui";
 import { useAuth } from "@/components/auth-provider";
-import { getAccessContext, getConnectorStatus } from "@/lib/api";
+import { getAccessContext, getAccessToken, getConnectorStatus } from "@/lib/api";
 
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
@@ -52,14 +52,15 @@ function SidebarContent({ close }: { close?: () => void }) {
 
 function WorkspaceStatus() {
   const auth = useAuth();
+  const accessScope = auth.session?.access_token ?? getAccessToken() ?? "anonymous";
   const context = useQuery({
-    queryKey: ["access-context", auth.session?.access_token ?? "anonymous"],
+    queryKey: ["access-context", accessScope],
     queryFn: getAccessContext,
     staleTime: 60_000,
     retry: false,
   });
   const connector = useQuery({
-    queryKey: ["connector-status", auth.session?.access_token ?? "anonymous"],
+    queryKey: ["connector-status", accessScope],
     queryFn: getConnectorStatus,
     staleTime: 60_000,
     retry: false,

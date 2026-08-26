@@ -4,6 +4,7 @@ import { api, getAccessHeaders, getAccessToken, setAccessToken } from "@/lib/api
 describe("workspace access client", () => {
   afterEach(() => {
     setAccessToken(null);
+    localStorage.removeItem("productlens-supabase-session");
     vi.restoreAllMocks();
   });
 
@@ -35,5 +36,32 @@ describe("workspace access client", () => {
     expect(getAccessHeaders()).toEqual({
       Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
     });
+  });
+
+  it("reuses a valid persisted Supabase token before auth state hydrates", () => {
+    localStorage.setItem(
+      "productlens-supabase-session",
+      JSON.stringify({
+        access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
+
+    expect(getAccessToken()).toBe("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature");
+    expect(getAccessHeaders()).toEqual({
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
+    });
+  });
+
+  it("does not reuse an expired persisted Supabase token", () => {
+    localStorage.setItem(
+      "productlens-supabase-session",
+      JSON.stringify({
+        access_token: "expired.header.signature",
+        expires_at: Math.floor(Date.now() / 1000) - 1,
+      }),
+    );
+
+    expect(getAccessToken()).toBeNull();
   });
 });

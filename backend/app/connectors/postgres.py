@@ -8,7 +8,11 @@ all analytics SQL still goes through the existing SQLGlot validator.
 from __future__ import annotations
 
 import os
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
+from threading import RLock
 
 from sqlalchemy import text
 
@@ -102,6 +106,27 @@ def _is_postgres_url(value: str) -> bool:
     return scheme in {"postgres", "postgresql", "postgresql+psycopg"}
 
 
+@lru_cache(maxsize=32)
+def _cached_source_database(
+    base_database: DatabaseService,
+    tenant_id: str,
+    source_id: str,
+    analytics_url: str,
+) -> DatabaseService:
+    """Reuse a tenant-bound engine while a warm serverless process lives."""
+
+    return base_database.with_analytics_source(
+        analytics_url,
+        source_id=source_id,
+        tenant_id=tenant_id,
+    )
+
+
+_STATUS_CACHE: OrderedDict[tuple[int, str, str, str], tuple[float, ConnectorSourceStatus]] = OrderedDict()
+_STATUS_CACHE_MAX_ENTRIES = 32
+_STATUS_CACHE_LOCK = RLock()
+
+
 class ReadOnlyPostgresConnector:
     """Bind a ``DatabaseService`` to one fixed analytics PostgreSQL source."""
 
@@ -109,10 +134,11 @@ class ReadOnlyPostgresConnector:
 
     def __init__(self, base_database: DatabaseService, binding: SourceBinding) -> None:
         self.binding = binding
-        self.database = base_database.with_analytics_source(
+        self.database = _cached_source_database(
+            base_database,
+            binding.tenant_id,
+            binding.source_id,
             binding.analytics_url,
-            source_id=binding.source_id,
-            tenant_id=binding.tenant_id,
         )
 
     def health(self) -> bool:
@@ -136,6 +162,18 @@ class ReadOnlyPostgresConnector:
             return False
 
     def status(self) -> ConnectorSourceStatus:
+        cache_key = (
+            id(self.database),
+            self.binding.tenant_id,
+            self.binding.source_id,
+            self.binding.analytics_url,
+        )
+        now = time.monotonic()
+        with _STATUS_CACHE_LOCK:
+            cached = _STATUS_CACHE.get(cache_key)
+            if cached is not None and cached[0] > now:
+                return cached[1].model_copy(deep=True)
+
         healthy = self.health()
         contract_ok = healthy and self.contract_ok()
         detail = (
@@ -143,7 +181,7 @@ class ReadOnlyPostgresConnector:
             if contract_ok
             else "Source is unavailable or does not expose the required analytics views"
         )
-        return ConnectorSourceStatus(
+        status = ConnectorSourceStatus(
             source_id=self.binding.source_id,
             tenant_id=self.binding.tenant_id,
             kind="postgres",
@@ -151,6 +189,12 @@ class ReadOnlyPostgresConnector:
             healthy=contract_ok,
             detail=detail,
         )
+        with _STATUS_CACHE_LOCK:
+            _STATUS_CACHE[cache_key] = (time.monotonic() + (30 if contract_ok else 5), status)
+            _STATUS_CACHE.move_to_end(cache_key)
+            while len(_STATUS_CACHE) > _STATUS_CACHE_MAX_ENTRIES:
+                _STATUS_CACHE.popitem(last=False)
+        return status.model_copy(deep=True)
 
 
 class TenantDatabaseRouter:

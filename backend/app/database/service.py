@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import UTC, date, datetime
+from threading import Lock, RLock
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,6 +20,14 @@ from app.models.contracts import SQLValidation
 
 class DatabaseUnavailable(RuntimeError):
     pass
+
+
+# Vercel may reuse a warm Python process, but the operational result cache is
+# still the source of truth across processes. This small local layer removes
+# repeated app-database round trips during a single overview/report fan-out.
+_MEMORY_CACHE_MAX_ENTRIES = 128
+_MEMORY_CACHE: OrderedDict[tuple[int, str, str], tuple[float, dict[str, Any]]] = OrderedDict()
+_MEMORY_CACHE_LOCK = RLock()
 
 
 class DatabaseService:
@@ -47,6 +58,9 @@ class DatabaseService:
         )
         self.timeout_ms = settings.query_timeout_ms
         self._resolved_dataset_as_of: date | None = None
+        self._dataset_as_of_lock = Lock()
+        self._dataset_version_cache: tuple[str, float] | None = None
+        self._dataset_version_lock = Lock()
 
     def with_analytics_source(
         self,
@@ -99,6 +113,27 @@ class DatabaseService:
             raise DatabaseUnavailable("The analytics database is unavailable") from exc
 
     def dataset_version(self) -> str | None:
+        ttl_seconds = max(0, int(getattr(self.settings, "dataset_version_cache_seconds", 5)))
+        now = time.monotonic()
+        with self._dataset_version_lock:
+            cached = self._dataset_version_cache
+            if ttl_seconds > 0 and cached is not None and cached[1] > now:
+                return cached[0]
+
+            value = self._read_dataset_version()
+            if value is None:
+                self._dataset_version_cache = None
+                return None
+
+            if cached is not None and cached[0] != value:
+                # A changed fingerprint makes the previously resolved date
+                # unsafe to reuse for relative periods.
+                with self._dataset_as_of_lock:
+                    self._resolved_dataset_as_of = None
+            self._dataset_version_cache = (value, now + ttl_seconds) if ttl_seconds > 0 else None
+            return value
+
+    def _read_dataset_version(self) -> str | None:
         if not self._is_demo_source():
             try:
                 rows = self._execute_fixed_readonly(
@@ -132,46 +167,68 @@ class DatabaseService:
 
         if self._is_demo_source():
             return DATASET_AS_OF
-        if self._resolved_dataset_as_of is not None:
-            return self._resolved_dataset_as_of
-        try:
-            rows = self._execute_fixed_readonly(
-                """SELECT GREATEST(
-                    COALESCE((SELECT max(event_timestamp)::date FROM analytics.events), DATE '1970-01-01'),
-                    COALESCE((SELECT max(signup_at)::date FROM analytics.users), DATE '1970-01-01'),
-                    COALESCE((SELECT max(\"timestamp\")::date FROM analytics.transactions), DATE '1970-01-01')
-                ) AS dataset_as_of"""
-            )
-            value = rows[0].get("dataset_as_of") if rows else None
-            if isinstance(value, datetime):
-                value = value.date()
-            if not isinstance(value, date) or value == date(1970, 1, 1):
-                raise DatabaseUnavailable("The external analytics source has no usable data horizon")
-            self._resolved_dataset_as_of = value
-            return value
-        except DatabaseUnavailable:
-            raise
-        except Exception as exc:
-            raise DatabaseUnavailable("The external analytics source is unavailable") from exc
+        with self._dataset_as_of_lock:
+            if self._resolved_dataset_as_of is not None:
+                return self._resolved_dataset_as_of
+            try:
+                rows = self._execute_fixed_readonly(
+                    """SELECT GREATEST(
+                        COALESCE((SELECT max(event_timestamp)::date FROM analytics.events), DATE '1970-01-01'),
+                        COALESCE((SELECT max(signup_at)::date FROM analytics.users), DATE '1970-01-01'),
+                        COALESCE((SELECT max(\"timestamp\")::date FROM analytics.transactions), DATE '1970-01-01')
+                    ) AS dataset_as_of"""
+                )
+                value = rows[0].get("dataset_as_of") if rows else None
+                if isinstance(value, datetime):
+                    value = value.date()
+                if not isinstance(value, date) or value == date(1970, 1, 1):
+                    raise DatabaseUnavailable("The external analytics source has no usable data horizon")
+                self._resolved_dataset_as_of = value
+                return value
+            except DatabaseUnavailable:
+                raise
+            except Exception as exc:
+                raise DatabaseUnavailable("The external analytics source is unavailable") from exc
 
     def cache_get(self, cache_key: str, dataset_version: str) -> dict[str, Any] | None:
         statement = text(
-            """SELECT payload FROM operational.result_cache
+            """SELECT payload, GREATEST(EXTRACT(EPOCH FROM (expires_at - now())), 0) AS ttl_remaining
+               FROM operational.result_cache
                WHERE cache_key=:cache_key AND dataset_version=:dataset_version AND expires_at > now()"""
         )
+        namespaced_key = self._cache_namespace(cache_key)
+        memory_key = (id(self.app_engine), namespaced_key, dataset_version)
+        with _MEMORY_CACHE_LOCK:
+            memory_entry = _MEMORY_CACHE.get(memory_key)
+            if memory_entry is not None:
+                expires_at, payload = memory_entry
+                if expires_at > time.monotonic():
+                    _MEMORY_CACHE.move_to_end(memory_key)
+                    return deepcopy(payload)
+                del _MEMORY_CACHE[memory_key]
         try:
             with self.app_engine.connect() as connection:
-                value = connection.execute(
+                row = connection.execute(
                     statement,
-                    {"cache_key": self._cache_namespace(cache_key), "dataset_version": dataset_version},
-                ).scalar_one_or_none()
-            return dict(value) if isinstance(value, dict) else None
+                    {"cache_key": namespaced_key, "dataset_version": dataset_version},
+                ).mappings().first()
+            if not row:
+                return None
+            value = row.get("payload")
+            ttl_remaining = float(row.get("ttl_remaining") or 0)
+            if not isinstance(value, dict) or ttl_remaining <= 0:
+                return None
+            self._memory_cache_put(memory_key, value, ttl_remaining)
+            return deepcopy(value)
         except Exception:
             return None
 
     def cache_put(self, cache_key: str, dataset_version: str, payload: dict[str, Any], ttl_seconds: int) -> None:
         if ttl_seconds <= 0:
             return
+        namespaced_key = self._cache_namespace(cache_key)
+        memory_key = (id(self.app_engine), namespaced_key, dataset_version)
+        self._memory_cache_put(memory_key, payload, ttl_seconds)
         statement = text(
             """INSERT INTO operational.result_cache (cache_key, dataset_version, payload, expires_at)
                VALUES (:cache_key, :dataset_version, CAST(:payload AS jsonb), now() + (:ttl_seconds * interval '1 second'))
@@ -183,7 +240,7 @@ class DatabaseService:
                 connection.execute(
                     statement,
                     {
-                        "cache_key": self._cache_namespace(cache_key),
+                        "cache_key": namespaced_key,
                         "dataset_version": dataset_version,
                         "payload": json.dumps(payload, default=str),
                         "ttl_seconds": ttl_seconds,
@@ -191,6 +248,18 @@ class DatabaseService:
                 )
         except Exception:
             pass
+
+    @staticmethod
+    def _memory_cache_put(
+        memory_key: tuple[int, str, str], payload: dict[str, Any], ttl_seconds: float
+    ) -> None:
+        if ttl_seconds <= 0:
+            return
+        with _MEMORY_CACHE_LOCK:
+            _MEMORY_CACHE[memory_key] = (time.monotonic() + ttl_seconds, deepcopy(payload))
+            _MEMORY_CACHE.move_to_end(memory_key)
+            while len(_MEMORY_CACHE) > _MEMORY_CACHE_MAX_ENTRIES:
+                _MEMORY_CACHE.popitem(last=False)
 
     def _cache_namespace(self, cache_key: str) -> str:
         if self._is_demo_source():
@@ -227,7 +296,8 @@ class DatabaseService:
             if isinstance(source_as_of, datetime):
                 source_as_of = source_as_of.date()
             if isinstance(source_as_of, date):
-                self._resolved_dataset_as_of = source_as_of
+                with self._dataset_as_of_lock:
+                    self._resolved_dataset_as_of = source_as_of
             version = self.dataset_version()
             if version is None:
                 raise DatabaseUnavailable("The external analytics source has no dataset fingerprint")

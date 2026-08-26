@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     ai_requests_per_session_hour: int = Field(default=10, ge=1, le=1000)
     ai_requests_global_day: int = Field(default=100, ge=1, le=100_000)
     result_cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)
+    # Avoid recalculating a source fingerprint for every sub-query in one
+    # overview request while keeping dataset changes visible to bounded SSE
+    # clients within a short window.
+    dataset_version_cache_seconds: int = Field(default=5, ge=0, le=300)
     query_timeout_ms: int = Field(default=5000, ge=100, le=60_000)
     max_query_rows: int = Field(default=5000, ge=1, le=50_000)
     proactive_report_budget_ms: int = Field(default=45_000, ge=5_000, le=60_000)
