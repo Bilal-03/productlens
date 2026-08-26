@@ -2,7 +2,7 @@
 
 ProductLens AI is an AI-assisted product analytics workspace that turns natural-language business questions into validated analytical investigations. It combines a governed semantic metrics layer, AST-validated read-only SQL, deterministic product analytics, controlled visualizations, and evidence-backed recommendations.
 
-> Current status: P0/P1 parity is implemented, deployed, and smoke-tested in production. The P2 proactive analytics milestone is implemented locally with on-demand anomaly, Product Pulse, weekly report, and Markdown surfaces; production rollout follows local and PostgreSQL integration acceptance. Experiments, advanced analytics, notebook/saved insights, and P3 extensions remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
+> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. P2 provides on-demand anomalies, Product Pulse, weekly reports, and Markdown export over the seeded Supabase dataset. Experiments, advanced analytics, notebook/saved insights, and P3 extensions remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
 
 ## Why it exists
 
@@ -38,7 +38,7 @@ Prerequisites: Docker, Node 22.x, npm 10+, and Python 3.12+.
 
 The dataset is synthetic and anchored to 2026-08-24 so relative-period demo questions remain reproducible.
 
-Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. PostgreSQL-backed P2 acceptance remains an environment-dependent rollout gate.
+Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. Local PostgreSQL-backed tests remain opt-in when a database is unavailable; production smoke verification covers the seeded incident and P2 surfaces.
 
 ## Documentation
 
