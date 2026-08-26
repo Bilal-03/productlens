@@ -33,7 +33,7 @@ class AdvancedAnalyticsService:
 
     QUERY_WORKERS = 4
     RISK_DIMENSIONS = ("plan", "company_size", "channel")
-    CACHE_VERSION = "advanced-analytics-v2"
+    CACHE_VERSION = "advanced-analytics-v3"
 
     def __init__(self, database: DatabaseService, validator: SQLValidator) -> None:
         self.database = database

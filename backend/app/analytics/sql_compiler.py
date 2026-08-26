@@ -229,29 +229,21 @@ def compile_churn_risk(period: DateRange, dimension: str) -> SQLProposal:
 def compile_journeys(period: DateRange) -> SQLProposal:
     journey_events = "('landing_page_viewed','signup_completed','onboarding_completed','checkout_started','payment_success','report_created','ai_assistant_used')"
     query = f"""
-    WITH ordered_events AS (
-      SELECT e.user_id, e.event_name,
-        ROW_NUMBER() OVER (PARTITION BY e.user_id ORDER BY e.event_timestamp, e.event_id) AS step
+    WITH user_paths AS (
+      SELECT e.user_id,
+        ARRAY_TO_STRING(
+          (ARRAY_AGG(e.event_name ORDER BY e.event_timestamp, e.event_id))[1:5],
+          ' → '
+        ) AS path
       FROM analytics.events e
       WHERE {period_sql(period, 'e.event_timestamp')}
         AND e.event_name IN {journey_events}
-    ), paths AS (
-      SELECT user_id,
-        CONCAT_WS(' → ',
-          MAX(event_name) FILTER (WHERE step=1),
-          MAX(event_name) FILTER (WHERE step=2),
-          MAX(event_name) FILTER (WHERE step=3),
-          MAX(event_name) FILTER (WHERE step=4),
-          MAX(event_name) FILTER (WHERE step=5)
-        ) AS path
-      FROM ordered_events
       GROUP BY user_id
-    ), non_empty AS (
-      SELECT user_id, path FROM paths WHERE path <> ''
     )
     SELECT path, COUNT(*)::int AS users,
       COUNT(*)::float / NULLIF(SUM(COUNT(*)) OVER (), 0) AS share
-    FROM non_empty
+    FROM user_paths
+    WHERE path <> ''
     GROUP BY path
     ORDER BY users DESC, path
     LIMIT 10

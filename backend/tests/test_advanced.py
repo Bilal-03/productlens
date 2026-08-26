@@ -54,7 +54,7 @@ class FakeDatabase:
                     "active_revenue_users": 80,
                 }
             ], 1.0
-        if "concat_ws" in query:
+        if "array_to_string" in query:
             return [{"path": "signup_completed → onboarding_completed", "users": 42, "share": 0.7}], 1.0
         assert "active_subscriptions" in query
         return [
