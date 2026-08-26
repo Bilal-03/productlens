@@ -1,13 +1,13 @@
 """Experiment assignments and governed advanced-analytics views.
 
-Revision ID: 0003_experiments_advanced_analytics
+Revision ID: 0003_experiments_advanced
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0003_experiments_advanced_analytics"
+revision = "0003_experiments_advanced"
 down_revision = "0002_p0p1_completion"
 branch_labels = None
 depends_on = None
