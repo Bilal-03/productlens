@@ -81,3 +81,45 @@ export type FeatureAdoptionResponse = {
 export type CatalogColumn = { name: string; data_type: string; description: string; sample_values: (string | number)[]; pii: boolean };
 export type CatalogTable = { name: string; description: string; primary_key: string; foreign_keys: Record<string, string>; columns: string[]; pii_columns: string[]; allowed_dimensions: string[]; column_metadata: CatalogColumn[]; row_count: number | null };
 export type CatalogResponse = { metrics: { name: string; label: string; description: string; kind: string; entity: string; format: string; valid_dimensions: string[] }[]; dimensions: { name: string; label: string; table: string; column: string; sample_values: string[]; expression?: string | null; valid_metrics?: string[] }[]; tables: CatalogTable[] };
+
+export type ProactiveMetricPoint = { label: string; value: number; formatted: string; numerator?: number | null; denominator?: number | null };
+export type AnomalyRecord = {
+  id: string; metric: string; metric_label: string; metric_format: "integer" | "percentage" | "currency"; dimension?: string | null; segment?: string | null;
+  period: DateRange; observed: ProactiveMetricPoint; baseline: ProactiveMetricPoint;
+  absolute_delta: number; relative_delta: number | null; z_score: number | null;
+  direction: "increase" | "decrease"; severity: "warning" | "critical"; sample_size: number;
+  evidence_ids: string[]; drivers: Driver[]; summary: string; copilot_question: string;
+};
+export type AnomalyMethodology = {
+  policy_version: string; bucket: "day"; analysis_period: DateRange; baseline_days: number;
+  minimum_baseline_points: number; minimum_sample_size: number; z_score_threshold: number;
+  rate_change_threshold: number; count_change_threshold: number; period_end_exclusive: boolean;
+};
+export type ProactiveSQLTransparency = { tables: string[]; metrics: string[]; query_count: number; validated: boolean };
+export type ProactiveMetadata = { generated_at: string; execution_ms: number; provider: string; model?: string | null; input_tokens?: number | null; output_tokens?: number | null };
+export type AnomaliesResponse = {
+  type: "anomaly_detection"; period: DateRange; dataset_as_of: string; anomalies: AnomalyRecord[];
+  evidence: Evidence[]; methodology: AnomalyMethodology; sql: ProactiveSQLTransparency;
+  warnings: string[]; metadata: ProactiveMetadata;
+};
+export type ProductPulseResponse = {
+  type: "product_pulse"; period: DateRange; dataset_as_of: string; items: AnomalyRecord[];
+  evidence: Evidence[]; methodology: AnomalyMethodology; sql: ProactiveSQLTransparency;
+  warnings: string[]; metadata: ProactiveMetadata;
+};
+export type ReportMetric = {
+  metric: string; label: string; format: "integer" | "percentage" | "currency";
+  current: ProactiveMetricPoint | null; previous: ProactiveMetricPoint | null;
+  absolute_delta: number | null; relative_delta: number | null; evidence_id?: string | null;
+};
+export type ReportSection = {
+  key: "growth" | "activation" | "engagement" | "retention" | "revenue";
+  title: string; summary: string; metrics: ReportMetric[]; findings: Finding[];
+};
+export type WeeklyReportResponse = {
+  type: "weekly_report"; period: DateRange; comparison_period: DateRange; dataset_as_of: string;
+  headline: string; summary: string; sections: ReportSection[]; anomalies: AnomalyRecord[];
+  drivers: Driver[]; evidence: Evidence[]; recommendations: AnalysisResponse["recommendations"];
+  follow_up_questions: string[]; caveats: string[]; methodology: AnomalyMethodology;
+  sql: ProactiveSQLTransparency; warnings: string[]; metadata: ProactiveMetadata;
+};

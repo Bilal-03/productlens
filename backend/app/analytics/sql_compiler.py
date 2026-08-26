@@ -31,6 +31,19 @@ QUALIFYING_ACTIVITY = "('dashboard_viewed','report_created','report_exported','a
 ACQUISITION_DIMENSIONS = frozenset(
     {"channel", "campaign", "country", "device", "browser", "plan", "company_size"}
 )
+PROACTIVE_METRICS = frozenset(
+    {
+        "revenue",
+        "signups",
+        "activation_rate",
+        "checkout_conversion",
+        "payment_success_rate",
+        "payment_failures",
+        "churn_rate",
+        "dau",
+    }
+)
+PROACTIVE_SERIES_MAX_DAYS = 118  # 28-day baseline plus the 90-day analysis horizon.
 
 
 def period_sql(period: DateRange, column: str) -> str:
@@ -523,6 +536,46 @@ def compile_metric(
           {filters_sql}
         {group}
         """
+    elif metric_name == "payment_failures":
+        segment_expression = "'All'::text" if dimension is None else DIMENSIONS[dimension]
+        attempt_segment = (
+            "'All'::text AS segment"
+            if dimension is None
+            else f"COALESCE(({segment_expression})::text, 'Unknown') AS segment"
+        )
+        query = f"""
+        WITH attempts AS (
+          SELECT e.session_id, {attempt_segment},
+            BOOL_OR(e.event_name='payment_failed') AS failed
+          FROM analytics.events e JOIN analytics.sessions s ON s.session_id=e.session_id
+          JOIN analytics.users u ON u.user_id=e.user_id
+          WHERE {period_sql(period, 'e.event_timestamp')}
+            AND e.event_name IN ('checkout_started', 'payment_failed')
+            {filters_sql}
+          GROUP BY e.session_id, {segment_expression}
+        )
+        SELECT segment,
+          COUNT(*) FILTER (WHERE failed)::float AS numerator,
+          COUNT(*)::float AS denominator,
+          COUNT(*) FILTER (WHERE failed)::float AS value
+        FROM attempts
+        GROUP BY segment
+        """
+    elif compiler == "event_count":
+        event_name = definition.event_name
+        if not event_name:
+            raise ValueError(f"Metric '{metric_name}' does not define an event name")
+        query = f"""
+        SELECT {segment},
+          COUNT(DISTINCT e.session_id)::float AS numerator,
+          COUNT(DISTINCT e.session_id)::float AS denominator,
+          COUNT(DISTINCT e.session_id)::float AS value
+        FROM analytics.events e JOIN analytics.sessions s ON s.session_id=e.session_id
+        JOIN analytics.users u ON u.user_id=e.user_id
+        WHERE {period_sql(period, 'e.event_timestamp')} AND e.event_name='{event_name}'
+          {filters_sql}
+        {group}
+        """
     elif compiler == "churn":
         query = f"""
         SELECT {segment},
@@ -573,6 +626,198 @@ def compile_metric(
         tables_used=["users", "sessions", "events", "subscriptions", "transactions"],
         metrics_used=[metric_name],
         assumptions=["UTC date boundaries", "The period end is exclusive"],
+    )
+
+
+def compile_metric_series(
+    metric_name: str,
+    period: DateRange,
+    dimension: str | None = None,
+) -> SQLProposal:
+    """Compile one bounded daily series query for proactive analytics.
+
+    The query intentionally returns only days with source rows. The service
+    fills missing days according to the metric kind, preserving zero-volume
+    count metrics while keeping empty rate buckets unavailable.
+    """
+
+    if metric_name not in PROACTIVE_METRICS:
+        raise ValueError(f"Metric '{metric_name}' is not supported for proactive analytics")
+    duration_days = (period.end - period.start).days
+    if duration_days < 1 or duration_days > PROACTIVE_SERIES_MAX_DAYS:
+        raise ValueError(
+            f"Proactive metric series must cover between 1 and {PROACTIVE_SERIES_MAX_DAYS} days"
+        )
+    registry.validate_dimension(metric_name, dimension)
+    if dimension is not None and metric_name not in {
+        "checkout_conversion",
+        "payment_success_rate",
+        "payment_failures",
+    }:
+        raise ValueError(f"Dimensioned proactive series are not implemented for {metric_name}")
+    definition = registry.metric(metric_name)
+    if metric_name == "revenue":
+        query = f"""
+        SELECT date_trunc('day', t.timestamp)::date AS bucket,
+          SUM(CASE WHEN t.status='success' THEN t.amount
+                   WHEN t.status='refunded' THEN -t.amount ELSE 0 END)::float AS numerator,
+          COUNT(*)::float AS denominator,
+          SUM(CASE WHEN t.status='success' THEN t.amount
+                   WHEN t.status='refunded' THEN -t.amount ELSE 0 END)::float AS value
+        FROM analytics.transactions t JOIN analytics.users u ON u.user_id=t.user_id
+        WHERE {period_sql(period, 't.timestamp')}
+        GROUP BY 1 ORDER BY 1
+        """
+        tables = ["transactions", "users"]
+    elif metric_name == "signups":
+        query = f"""
+        SELECT date_trunc('day', e.event_timestamp)::date AS bucket,
+          COUNT(DISTINCT e.user_id)::float AS numerator,
+          COUNT(DISTINCT e.user_id)::float AS denominator,
+          COUNT(DISTINCT e.user_id)::float AS value
+        FROM analytics.events e
+        WHERE {period_sql(period, 'e.event_timestamp')} AND e.event_name='signup_completed'
+        GROUP BY 1 ORDER BY 1
+        """
+        tables = ["events"]
+    elif metric_name == "activation_rate":
+        query = f"""
+        WITH signups AS (
+          SELECT e.user_id, MIN(e.event_timestamp) AS signup_at
+          FROM analytics.events e
+          WHERE {period_sql(period, 'e.event_timestamp')} AND e.event_name='signup_completed'
+          GROUP BY e.user_id
+        )
+        SELECT signup_at::date AS bucket,
+          SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM analytics.events activation
+            WHERE activation.user_id=signups.user_id
+              AND activation.event_name='onboarding_completed'
+              AND activation.event_timestamp >= signups.signup_at
+              AND activation.event_timestamp < signups.signup_at + interval '7 days'
+          ) THEN 1 ELSE 0 END)::float AS numerator,
+          COUNT(*)::float AS denominator,
+          SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM analytics.events activation
+            WHERE activation.user_id=signups.user_id
+              AND activation.event_name='onboarding_completed'
+              AND activation.event_timestamp >= signups.signup_at
+              AND activation.event_timestamp < signups.signup_at + interval '7 days'
+          ) THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS value
+        FROM signups
+        GROUP BY 1 ORDER BY 1
+        """
+        tables = ["events"]
+    elif metric_name in {"checkout_conversion", "payment_success_rate"}:
+        denominator_event = "checkout_started" if metric_name == "checkout_conversion" else "payment_submitted"
+        numerator_event = "payment_success"
+        segment_expression = DIMENSIONS[dimension] if dimension else None
+        segment_select = f", COALESCE(({segment_expression})::text, 'Unknown') AS segment" if segment_expression else ""
+        segment_group = f", {segment_expression}" if segment_expression else ""
+        outer_segment = ", segment" if segment_expression else ""
+        outer_group = ", 2" if segment_expression else ""
+        segment_joins = (
+            " JOIN analytics.sessions s ON s.session_id=e.session_id"
+            " JOIN analytics.users u ON u.user_id=e.user_id"
+            if segment_expression
+            else ""
+        )
+        query = f"""
+        WITH attempts AS (
+          SELECT e.session_id{segment_select},
+            MIN(e.event_timestamp) FILTER (WHERE e.event_name='{denominator_event}') AS denominator_at,
+            BOOL_OR(e.event_name='{numerator_event}') AS succeeded
+          FROM analytics.events e{segment_joins}
+          WHERE {period_sql(period, 'e.event_timestamp')}
+            AND e.event_name IN ('{denominator_event}', '{numerator_event}')
+          GROUP BY e.session_id{segment_group}
+        )
+        SELECT denominator_at::date AS bucket{outer_segment},
+          COUNT(*) FILTER (WHERE succeeded)::float AS numerator,
+          COUNT(*)::float AS denominator,
+          COUNT(*) FILTER (WHERE succeeded)::float / NULLIF(COUNT(*), 0) AS value
+        FROM attempts
+        WHERE denominator_at IS NOT NULL
+        GROUP BY 1{outer_group} ORDER BY 1
+        """
+        tables = ["events"]
+    elif metric_name == "payment_failures":
+        segment_expression = DIMENSIONS[dimension] if dimension else None
+        segment_select = f", COALESCE(({segment_expression})::text, 'Unknown') AS segment" if segment_expression else ""
+        segment_group = f", {segment_expression}" if segment_expression else ""
+        outer_segment = ", segment" if segment_expression else ""
+        outer_group = ", 2" if segment_expression else ""
+        segment_joins = (
+            " JOIN analytics.sessions s ON s.session_id=e.session_id"
+            " JOIN analytics.users u ON u.user_id=e.user_id"
+            if segment_expression
+            else ""
+        )
+        query = f"""
+        WITH attempts AS (
+          SELECT e.session_id{segment_select},
+            MIN(e.event_timestamp) FILTER (WHERE e.event_name='checkout_started') AS attempt_at,
+            BOOL_OR(e.event_name='payment_failed') AS failed
+          FROM analytics.events e{segment_joins}
+          WHERE {period_sql(period, 'e.event_timestamp')}
+            AND e.event_name IN ('checkout_started', 'payment_failed')
+          GROUP BY e.session_id{segment_group}
+        )
+        SELECT attempt_at::date AS bucket{outer_segment},
+          COUNT(*) FILTER (WHERE failed)::float AS numerator,
+          COUNT(*)::float AS denominator,
+          COUNT(*) FILTER (WHERE failed)::float AS value
+        FROM attempts
+        WHERE attempt_at IS NOT NULL
+        GROUP BY 1{outer_group} ORDER BY 1
+        """
+        tables = ["events"]
+    elif metric_name == "dau":
+        query = f"""
+        SELECT date_trunc('day', e.event_timestamp)::date AS bucket,
+          COUNT(DISTINCT e.user_id)::float AS numerator,
+          COUNT(DISTINCT e.user_id)::float AS denominator,
+          COUNT(DISTINCT e.user_id)::float AS value
+        FROM analytics.events e
+        WHERE {period_sql(period, 'e.event_timestamp')}
+          AND e.event_name IN {QUALIFYING_ACTIVITY}
+        GROUP BY 1 ORDER BY 1
+        """
+        tables = ["events"]
+    elif metric_name == "churn_rate":
+        query = f"""
+        WITH days AS (
+          SELECT DISTINCT date_trunc('day', cancelled_at)::date AS bucket
+          FROM analytics.subscriptions
+          WHERE {period_sql(period, 'cancelled_at')}
+        ), daily AS (
+          SELECT days.bucket,
+            COUNT(DISTINCT sub.subscription_id) FILTER (
+              WHERE sub.cancelled_at >= days.bucket
+                AND sub.cancelled_at < days.bucket + interval '1 day'
+            )::float AS numerator,
+            COUNT(DISTINCT sub.subscription_id) FILTER (
+              WHERE sub.started_at < days.bucket
+                AND (sub.cancelled_at IS NULL OR sub.cancelled_at >= days.bucket)
+            )::float AS denominator
+          FROM days
+          JOIN analytics.subscriptions sub
+            ON sub.started_at < days.bucket + interval '1 day'
+          GROUP BY days.bucket
+        )
+        SELECT bucket, numerator, denominator,
+          numerator / NULLIF(denominator, 0) AS value
+        FROM daily ORDER BY bucket
+        """
+        tables = ["subscriptions"]
+    else:
+        raise ValueError(f"Metric '{metric_name}' is not supported for proactive analytics")
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Calculate the daily {definition.label} series for {period.label}",
+        tables_used=tables,
+        metrics_used=[metric_name],
+        assumptions=["UTC day buckets", "The period end is exclusive", "Missing count buckets are filled as zero"],
     )
 
 

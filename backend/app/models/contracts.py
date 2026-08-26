@@ -368,3 +368,135 @@ class OverviewAnalyticsResponse(BaseModel):
     acquisition: AcquisitionAnalyticsResponse
     activation_funnel: dict[str, Any]
     retention_snapshot: RetentionAnalyticsResponse
+
+
+class AnomalySeverity(StrEnum):
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class AnomalyDirection(StrEnum):
+    INCREASE = "increase"
+    DECREASE = "decrease"
+
+
+class MetricSeriesPoint(BaseModel):
+    bucket: date
+    value: float | None
+    numerator: float | None = None
+    denominator: float | None = None
+    sample_size: int | None = None
+
+
+class AnomalyMethodology(BaseModel):
+    policy_version: str
+    bucket: Literal["day"] = "day"
+    analysis_period: DateRange
+    baseline_days: int
+    minimum_baseline_points: int
+    minimum_sample_size: int
+    z_score_threshold: float
+    rate_change_threshold: float
+    count_change_threshold: float
+    period_end_exclusive: bool = True
+
+
+class ProactiveSQLTransparency(BaseModel):
+    tables: list[str]
+    metrics: list[str]
+    query_count: int
+    validated: bool
+
+
+class ProactiveMetadata(BaseModel):
+    generated_at: datetime
+    execution_ms: float
+    provider: str = "deterministic"
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class AnomalyRecord(BaseModel):
+    id: str
+    metric: str
+    metric_label: str
+    metric_format: Literal["integer", "percentage", "currency"]
+    dimension: str | None = None
+    segment: str | None = None
+    period: DateRange
+    observed: MetricPoint
+    baseline: MetricPoint
+    absolute_delta: float
+    relative_delta: float | None
+    z_score: float | None
+    direction: AnomalyDirection
+    severity: AnomalySeverity
+    sample_size: int
+    evidence_ids: list[str]
+    drivers: list[Driver] = Field(default_factory=list)
+    summary: str
+    copilot_question: str
+
+
+class AnomaliesResponse(BaseModel):
+    type: Literal["anomaly_detection"] = "anomaly_detection"
+    period: DateRange
+    dataset_as_of: date
+    anomalies: list[AnomalyRecord]
+    evidence: list[Evidence]
+    methodology: AnomalyMethodology
+    sql: ProactiveSQLTransparency
+    warnings: list[str] = Field(default_factory=list)
+    metadata: ProactiveMetadata
+
+
+class ProductPulseResponse(BaseModel):
+    type: Literal["product_pulse"] = "product_pulse"
+    period: DateRange
+    dataset_as_of: date
+    items: list[AnomalyRecord]
+    evidence: list[Evidence]
+    methodology: AnomalyMethodology
+    sql: ProactiveSQLTransparency
+    warnings: list[str] = Field(default_factory=list)
+    metadata: ProactiveMetadata
+
+
+class ReportMetric(BaseModel):
+    metric: str
+    label: str
+    format: Literal["integer", "percentage", "currency"]
+    current: MetricPoint | None
+    previous: MetricPoint | None
+    absolute_delta: float | None
+    relative_delta: float | None
+    evidence_id: str | None = None
+
+
+class ReportSection(BaseModel):
+    key: Literal["growth", "activation", "engagement", "retention", "revenue"]
+    title: str
+    summary: str
+    metrics: list[ReportMetric]
+    findings: list[Finding] = Field(default_factory=list)
+
+
+class WeeklyReportResponse(BaseModel):
+    type: Literal["weekly_report"] = "weekly_report"
+    period: DateRange
+    comparison_period: DateRange
+    dataset_as_of: date
+    headline: str
+    summary: str
+    sections: list[ReportSection]
+    anomalies: list[AnomalyRecord]
+    drivers: list[Driver]
+    evidence: list[Evidence]
+    recommendations: list[Recommendation]
+    follow_up_questions: list[str]
+    caveats: list[str]
+    methodology: AnomalyMethodology
+    sql: ProactiveSQLTransparency
+    warnings: list[str] = Field(default_factory=list)
+    metadata: ProactiveMetadata

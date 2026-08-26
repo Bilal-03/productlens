@@ -17,6 +17,7 @@ class MetricDefinition(BaseModel):
     format: Literal["integer", "percentage", "currency"]
     compiler: str
     valid_dimensions: list[str]
+    event_name: str | None = None
     numerator_event: str | None = None
     denominator_event: str | None = None
     retention_day: int | None = None

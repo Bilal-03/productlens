@@ -1,4 +1,4 @@
-import type { CopilotResponse } from "./types";
+import type { CopilotResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
@@ -27,4 +27,16 @@ export function getHistoryItem(queryId: string) {
   return api<CopilotResponse>(`/history/${encodeURIComponent(queryId)}`, {
     headers: { "X-ProductLens-Session": getSessionId() },
   });
+}
+
+export function getProductPulse(period = "last_30_days", limit = 20) {
+  return api<ProductPulseResponse>(`/insights/pulse?period=${encodeURIComponent(period)}&limit=${limit}`);
+}
+
+export function getWeeklyReport(period = "last_week") {
+  return api<WeeklyReportResponse>(`/reports/weekly?period=${encodeURIComponent(period)}`);
+}
+
+export function weeklyReportMarkdownUrl(period = "last_week") {
+  return `${API_URL}/reports/weekly/markdown?period=${encodeURIComponent(period)}`;
 }

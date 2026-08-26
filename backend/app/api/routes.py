@@ -4,12 +4,14 @@ from functools import lru_cache
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 from app.ai.insights import InsightService
 from app.ai.pipeline import CopilotPipeline
 from app.ai.planner import QuestionPlanner
 from app.ai.providers import ProviderRouter
 from app.ai.sql_generation import SQLGenerator
+from app.analytics.proactive import ProactiveAnalyticsService
 from app.analytics.service import AnalyticsService
 from app.config import Settings, get_settings
 from app.database.service import DatabaseService, DatabaseUnavailable
@@ -17,14 +19,17 @@ from app.models.contracts import (
     AcquisitionAnalyticsResponse,
     AcquisitionRequest,
     AnalyticsRequest,
+    AnomaliesResponse,
     CopilotRequest,
     CopilotResponse,
     FeatureAdoptionAnalyticsResponse,
     FunnelRequest,
     OverviewAnalyticsResponse,
     OverviewRequest,
+    ProductPulseResponse,
     RetentionAnalyticsResponse,
     RetentionRequest,
+    WeeklyReportResponse,
 )
 from app.security.session import hash_session
 from app.security.sql_validator import SQLSafetyPolicy, SQLValidator
@@ -61,6 +66,15 @@ def copilot_pipeline() -> CopilotPipeline:
         validator=sql_validator(),
         insights=InsightService(provider_router),
         sql_generator=SQLGenerator(provider_router, sql_validator()),
+    )
+
+
+@lru_cache
+def proactive_service() -> ProactiveAnalyticsService:
+    return ProactiveAnalyticsService(
+        database_service(),
+        sql_validator(),
+        InsightService(ProviderRouter(get_settings())),
     )
 
 
@@ -169,6 +183,66 @@ def funnel_analysis(request: FunnelRequest, service: AnalyticsService = Depends(
         return service.funnel(request)
     except (ValueError, DatabaseUnavailable) as exc:
         raise HTTPException(status_code=422 if isinstance(exc, ValueError) else 503, detail=str(exc)) from exc
+
+
+@router.get("/insights/anomalies", response_model=AnomaliesResponse)
+def anomalies(
+    period: str = Query(default="last_30_days"),
+    limit: int = Query(default=50, ge=1, le=50),
+    service: ProactiveAnalyticsService = Depends(proactive_service),
+) -> AnomaliesResponse:
+    try:
+        return service.anomalies(period, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/insights/pulse", response_model=ProductPulseResponse)
+def product_pulse(
+    period: str = Query(default="last_30_days"),
+    limit: int = Query(default=20, ge=1, le=50),
+    service: ProactiveAnalyticsService = Depends(proactive_service),
+) -> ProductPulseResponse:
+    try:
+        return service.pulse(period, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/reports/weekly/markdown")
+def weekly_report_markdown(
+    period: str = Query(default="last_week"),
+    service: ProactiveAnalyticsService = Depends(proactive_service),
+) -> PlainTextResponse:
+    try:
+        report = service.weekly_report(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    filename = f"productlens-weekly-report-{report.period.start.isoformat()}.md"
+    return PlainTextResponse(
+        ProactiveAnalyticsService.to_markdown(report),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/reports/weekly", response_model=WeeklyReportResponse)
+def weekly_report(
+    period: str = Query(default="last_week"),
+    service: ProactiveAnalyticsService = Depends(proactive_service),
+) -> WeeklyReportResponse:
+    try:
+        return service.weekly_report(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/copilot/analyze", response_model=CopilotResponse)

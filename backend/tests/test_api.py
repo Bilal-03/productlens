@@ -3,15 +3,25 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.routes import analytics_service, database_service
+from app.api.routes import analytics_service, database_service, proactive_service
 from app.main import app
 from app.models.contracts import (
     AcquisitionAnalyticsResponse,
     AcquisitionSegment,
+    AnomaliesResponse,
+    AnomalyMethodology,
+    AnomalyRecord,
+    DateRange,
+    Evidence,
     FeatureAdoptionAnalyticsResponse,
     FeatureAdoptionRow,
     OverviewAnalyticsResponse,
+    ProactiveMetadata,
+    ProactiveSQLTransparency,
+    ProductPulseResponse,
+    ReportSection,
     RetentionAnalyticsResponse,
+    WeeklyReportResponse,
 )
 from app.security.session import hash_session
 
@@ -153,3 +163,109 @@ def test_history_reopen_is_session_scoped_and_does_not_consume_quota() -> None:
     assert response.json() == {"type": "analysis", "query_id": str(query_id)}
     assert captured["query_id"] == query_id
     assert captured["session_hash"] == hash_session(session, "development-only-secret-change-me")
+
+
+def test_proactive_routes_return_typed_json_and_markdown_contracts() -> None:
+    period = DateRange(start=date(2026, 8, 17), end=date(2026, 8, 24), label="Last completed week")
+    methodology = AnomalyMethodology(
+        policy_version="rolling-zscore-v1",
+        analysis_period=DateRange(start=date(2026, 5, 26), end=date(2026, 8, 24), label="Last 90 Days"),
+        baseline_days=28,
+        minimum_baseline_points=14,
+        minimum_sample_size=100,
+        z_score_threshold=2,
+        rate_change_threshold=0.1,
+        count_change_threshold=0.15,
+    )
+    evidence = [Evidence(id="anomaly-metric", label="Checkout Conversion anomaly", value="10.0% vs 12.0%", detail="Test evidence")]
+    anomaly = AnomalyRecord(
+        id="anomaly-checkout_conversion-2026-08-18",
+        metric="checkout_conversion",
+        metric_label="Checkout Conversion",
+        metric_format="percentage",
+        period=period,
+        observed={"label": "Aug 18, 2026", "value": 0.1, "formatted": "10.0%"},
+        baseline={"label": "28-day rolling baseline", "value": 0.12, "formatted": "12.0%"},
+        absolute_delta=-0.02,
+        relative_delta=-1 / 6,
+        z_score=-3.0,
+        direction="decrease",
+        severity="critical",
+        sample_size=500,
+        evidence_ids=["anomaly-metric"],
+        summary="Checkout Conversion decreased to 10.0%.",
+        copilot_question="Why did checkout conversion decrease?",
+    )
+    sql = ProactiveSQLTransparency(tables=["events"], metrics=["checkout_conversion"], query_count=1, validated=True)
+    metadata = ProactiveMetadata(generated_at="2026-08-26T00:00:00Z", execution_ms=1)
+    anomaly_response = AnomaliesResponse(
+        period=period,
+        dataset_as_of=date(2026, 8, 24),
+        anomalies=[anomaly],
+        evidence=evidence,
+        methodology=methodology,
+        sql=sql,
+        metadata=metadata,
+    )
+    pulse_response = ProductPulseResponse(
+        period=period,
+        dataset_as_of=date(2026, 8, 24),
+        items=[anomaly],
+        evidence=evidence,
+        methodology=methodology,
+        sql=sql,
+        metadata=metadata,
+    )
+    report_response = WeeklyReportResponse(
+        period=period,
+        comparison_period=DateRange(start=date(2026, 8, 10), end=date(2026, 8, 17), label="Previous completed week"),
+        dataset_as_of=date(2026, 8, 24),
+        headline="Checkout Conversion is the strongest weekly signal",
+        summary="Checkout Conversion decreased to 10.0%.",
+        sections=[ReportSection(key="growth", title="Growth", summary="Growth is stable.", metrics=[])],
+        anomalies=[anomaly],
+        drivers=[],
+        evidence=evidence,
+        recommendations=[],
+        follow_up_questions=["What changed?", "Where did it change?"],
+        caveats=[],
+        methodology=methodology,
+        sql=sql,
+        metadata=metadata,
+    )
+
+    class StubProactive:
+        def anomalies(self, period_name: str, limit: int) -> AnomaliesResponse:
+            assert period_name == "last_30_days"
+            assert limit == 50
+            return anomaly_response
+
+        def pulse(self, period_name: str, limit: int) -> ProductPulseResponse:
+            assert period_name == "last_30_days"
+            assert limit == 20
+            return pulse_response
+
+        def weekly_report(self, period_name: str) -> WeeklyReportResponse:
+            assert period_name == "last_week"
+            return report_response
+
+    app.dependency_overrides[proactive_service] = lambda: StubProactive()  # type: ignore[assignment]
+    try:
+        assert client.get("/api/v1/insights/anomalies").status_code == 200
+        assert client.get("/api/v1/insights/pulse").json()["type"] == "product_pulse"
+        report = client.get("/api/v1/reports/weekly")
+        assert report.status_code == 200
+        markdown = client.get("/api/v1/reports/weekly/markdown")
+    finally:
+        app.dependency_overrides.clear()
+    assert markdown.status_code == 200
+    assert markdown.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in markdown.headers["content-disposition"]
+    assert "# ProductLens Weekly Product Report" in markdown.text
+
+
+def test_proactive_routes_reject_invalid_periods_and_limits() -> None:
+    assert client.get("/api/v1/insights/anomalies", params={"limit": 0}).status_code == 422
+    assert client.get("/api/v1/insights/pulse", params={"limit": 51}).status_code == 422
+    assert client.get("/api/v1/insights/anomalies", params={"period": "tomorrow"}).status_code == 422
+    assert client.get("/api/v1/reports/weekly", params={"period": "last_30_days"}).status_code == 422

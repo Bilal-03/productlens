@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { Activity, BarChart3, BookOpen, BrainCircuit, ChevronDown, Database, History, LayoutDashboard, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
+import { Activity, BarChart3, BookOpen, BrainCircuit, ChevronDown, Database, FileText, History, LayoutDashboard, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
 import { cn } from "@/components/ui";
 
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/copilot", label: "Ask Copilot", icon: Sparkles },
+  { href: "/insights", label: "Product Pulse", icon: TrendingUp },
+  { href: "/reports/weekly", label: "Weekly Report", icon: FileText },
   { section: "Analytics" },
   { href: "/analytics/funnels", label: "Funnels", icon: Network },
   { href: "/analytics/retention", label: "Retention", icon: Activity },

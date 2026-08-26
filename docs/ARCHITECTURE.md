@@ -11,6 +11,17 @@ Question → Classification → Analytics plan → Metric resolution → Schema 
 
 The LLM parses and interprets; it does not calculate metrics or control credentials. Governed analytics compile through trusted SQL builders. Supported ad-hoc questions use a structured SQL contract with relevant semantic schema retrieval, then pass through the identical SQLGlot validator and read-only executor. Syntax/schema failures receive exactly one repair attempt; unsafe SQL is rejected without repair.
 
+## Proactive analytics
+
+```text
+Dataset version → bounded daily governed series → SQLGlot validation
+               → read-only execution → rolling baseline/z-score gates
+               → collapsed anomaly episodes → fixed-dimension drivers
+               → Product Pulse / weekly report → optional grounded prose
+```
+
+The proactive endpoints are on-demand; no scheduler or schema migration is required for this milestone. Series compilation is allowlisted to the eight P2 metrics and capped at 118 days (90 analysis days plus 28 baseline days). Each statement is validated and executed through `analytics_reader`. Complete response payloads are stored in `operational.result_cache` with request and policy-version keys plus the dataset version supplied to the cache lookup, so reseeding invalidates stale results. Report values, anomaly calculations, drivers, recommendations, and Markdown rendering remain deterministic. A provider can be called once for report prose, and the grounded-insight validator falls back to deterministic text if it is unavailable or introduces unsupported evidence/numbers.
+
 ## Boundaries
 
 - `frontend`: presentation, interaction, controlled Plotly rendering.

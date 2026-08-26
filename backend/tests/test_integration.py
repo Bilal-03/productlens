@@ -142,6 +142,43 @@ def test_completion_analytics_routes_execute_with_real_roles() -> None:
     assert overview_payload["revenue_trend"]["points"]
 
 
+def test_full_profile_proactive_pulse_surfaces_checkout_incident() -> None:
+    metadata = client.get("/api/v1/metadata/dataset")
+    assert metadata.status_code == 200
+    if metadata.json()["profile"] != "full":
+        pytest.skip("The seeded checkout-incident assertion requires the full profile")
+
+    pulse = client.get("/api/v1/insights/pulse", params={"period": "last_30_days", "limit": 20})
+
+    assert pulse.status_code == 200
+    payload = pulse.json()
+    assert payload["type"] == "product_pulse"
+    assert payload["sql"]["validated"] is True
+    checkout_signals = [
+        item
+        for item in payload["items"]
+        if item["metric"] in {"checkout_conversion", "payment_success_rate", "payment_failures"}
+    ]
+    assert checkout_signals
+    assert all(item["severity"] in {"warning", "critical"} for item in checkout_signals)
+    assert any(
+        driver["segment"] == "Mobile / Safari / Paid Social"
+        for item in checkout_signals
+        for driver in item["drivers"]
+    )
+
+    report = client.get("/api/v1/reports/weekly")
+    assert report.status_code == 200
+    report_payload = report.json()
+    assert [section["key"] for section in report_payload["sections"]] == [
+        "growth",
+        "activation",
+        "engagement",
+        "retention",
+        "revenue",
+    ]
+
+
 def test_analytics_reader_cannot_reach_source_or_operational_schemas() -> None:
     url = get_settings().analytics_database_url.replace("postgresql+psycopg", "postgresql")
     with psycopg.connect(url, autocommit=True) as connection, connection.cursor() as cursor:
