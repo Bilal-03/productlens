@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from app.models.contracts import DateRange, Filter, SQLProposal
 from app.semantic.registry import registry
 
@@ -44,10 +46,306 @@ PROACTIVE_METRICS = frozenset(
     }
 )
 PROACTIVE_SERIES_MAX_DAYS = 118  # 28-day baseline plus the 90-day analysis horizon.
+EXPERIMENT_METRICS = frozenset({"activation_rate", "checkout_conversion", "payment_success_rate"})
 
 
 def period_sql(period: DateRange, column: str) -> str:
     return f"{column} >= '{period.start.isoformat()}'::date AND {column} < '{period.end.isoformat()}'::date"
+
+
+def compile_experiments() -> SQLProposal:
+    """Compile the bounded experiment catalog used by the analysis UI."""
+
+    query = """
+    SELECT x.experiment_key, x.name, x.hypothesis, x.primary_metric,
+      x.control_variant, x.status, x.started_at, x.ended_at,
+      ARRAY_AGG(DISTINCT a.variant ORDER BY a.variant)
+        FILTER (WHERE a.variant IS NOT NULL) AS variants
+    FROM analytics.experiments x
+    LEFT JOIN analytics.experiment_assignments a ON a.experiment_id=x.experiment_id
+    GROUP BY x.experiment_id, x.experiment_key, x.name, x.hypothesis,
+      x.primary_metric, x.control_variant, x.status, x.started_at, x.ended_at
+    ORDER BY x.started_at DESC, x.experiment_key
+    """
+    return SQLProposal(
+        query=query.strip(),
+        purpose="List governed experiments and their assigned variants",
+        tables_used=["experiments", "experiment_assignments"],
+        metrics_used=[],
+        assumptions=["Only analytics views are queried", "Variant labels come from recorded assignments"],
+    )
+
+
+def compile_experiment_analysis(
+    experiment_key: str,
+    period: DateRange,
+    metric: str,
+) -> SQLProposal:
+    """Compile one assignment-level conversion query for a governed experiment."""
+
+    if metric not in EXPERIMENT_METRICS:
+        raise ValueError(f"Metric '{metric}' is not supported for experiment analysis")
+    if not experiment_key.strip() or len(experiment_key) > 120:
+        raise ValueError("Experiment key is invalid")
+    key = _literal(experiment_key.strip())
+    cohort = f"""
+      SELECT a.user_id, a.variant, a.assigned_at, u.signup_at
+      FROM analytics.experiment_assignments a
+      JOIN analytics.experiments x ON x.experiment_id=a.experiment_id
+      JOIN analytics.users u ON u.user_id=a.user_id
+      WHERE x.experiment_key={key}
+        AND a.assigned_at < '{period.end.isoformat()}'::date
+        AND a.assigned_at >= GREATEST('{period.start.isoformat()}'::date, x.started_at)
+        AND (x.ended_at IS NULL OR a.assigned_at < x.ended_at)
+    """
+    if metric == "activation_rate":
+        query = f"""
+        WITH assignment_cohort AS ({cohort}), eligible AS (
+          SELECT c.*
+          FROM assignment_cohort c
+          WHERE EXISTS (
+            SELECT 1 FROM analytics.events signup
+            WHERE signup.user_id=c.user_id AND signup.event_name='signup_completed'
+              AND signup.event_timestamp >= c.signup_at
+              AND signup.event_timestamp < '{period.end.isoformat()}'::date
+          )
+        ), outcomes AS (
+          SELECT c.variant, c.user_id,
+            EXISTS (
+              SELECT 1 FROM analytics.events e
+              WHERE e.user_id=c.user_id AND e.event_name='onboarding_completed'
+                AND e.event_timestamp >= c.signup_at
+                AND e.event_timestamp < c.signup_at + interval '7 days'
+                AND e.event_timestamp < '{period.end.isoformat()}'::date
+            ) AS converted
+          FROM eligible c
+        )
+        SELECT variant,
+          COUNT(*)::int AS sample_size,
+          COUNT(*) FILTER (WHERE converted)::int AS conversions,
+          COUNT(*) FILTER (WHERE converted)::float / NULLIF(COUNT(*), 0) AS conversion_rate
+        FROM outcomes
+        GROUP BY variant
+        ORDER BY variant
+        """
+        definition = "Assigned users who complete signup and onboarding within seven days of signup"
+    else:
+        event_name = "checkout_started" if metric == "checkout_conversion" else "payment_submitted"
+        query = f"""
+        WITH assignment_cohort AS ({cohort}), session_outcomes AS (
+          SELECT c.variant, s.session_id,
+            BOOL_OR(e.event_name='{event_name}') AS eligible,
+            BOOL_OR(e.event_name='payment_success') AS converted
+          FROM assignment_cohort c
+          JOIN analytics.sessions s ON s.user_id=c.user_id AND s.started_at >= c.assigned_at
+          JOIN analytics.events e ON e.session_id=s.session_id
+          WHERE {period_sql(period, 'e.event_timestamp')}
+            AND e.event_name IN ('{event_name}', 'payment_success')
+          GROUP BY c.variant, s.session_id
+        ), outcomes AS (
+          SELECT variant, eligible, converted
+          FROM session_outcomes
+          WHERE eligible
+        )
+        SELECT variant,
+          COUNT(*)::int AS sample_size,
+          COUNT(*) FILTER (WHERE converted)::int AS conversions,
+          COUNT(*) FILTER (WHERE converted)::float / NULLIF(COUNT(*), 0) AS conversion_rate
+        FROM outcomes
+        GROUP BY variant
+        ORDER BY variant
+        """
+        definition = (
+            "Assigned sessions that reach payment success after checkout start"
+            if metric == "checkout_conversion"
+            else "Assigned sessions with a payment submission that reach payment success"
+        )
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Compare experiment variants on {metric}",
+        tables_used=["experiments", "experiment_assignments", "users", "events", "sessions"],
+        metrics_used=[metric],
+        assumptions=["Assignments are user-level and evaluated after assignment", definition, "The period end is exclusive"],
+    )
+
+
+ADVANCED_RISK_DIMENSIONS = {
+    "plan": "u.plan",
+    "company_size": "u.company_size",
+    "channel": "u.acquisition_channel",
+}
+
+
+def compile_churn_risk(period: DateRange, dimension: str) -> SQLProposal:
+    if dimension not in ADVANCED_RISK_DIMENSIONS:
+        raise ValueError(f"Churn risk dimension '{dimension}' is not supported")
+    expression = ADVANCED_RISK_DIMENSIONS[dimension]
+    query = f"""
+    WITH active_subscriptions AS (
+      SELECT sub.subscription_id, sub.user_id,
+        COALESCE(({expression})::text, 'Unknown') AS segment,
+        sub.cancelled_at,
+        EXISTS (
+          SELECT 1 FROM analytics.events e
+          WHERE e.user_id=sub.user_id
+            AND e.event_name IN {QUALIFYING_ACTIVITY}
+            AND e.event_timestamp >= '{(period.end - timedelta(days=30)).isoformat()}'::date
+            AND e.event_timestamp < '{period.end.isoformat()}'::date
+        ) AS recently_active
+      FROM analytics.subscriptions sub
+      JOIN analytics.users u ON u.user_id=sub.user_id
+      WHERE sub.started_at < '{period.start.isoformat()}'::date
+        AND (sub.cancelled_at IS NULL OR sub.cancelled_at >= '{period.start.isoformat()}'::date)
+    )
+    SELECT segment,
+      COUNT(DISTINCT subscription_id)::int AS active_subscriptions,
+      COUNT(DISTINCT subscription_id) FILTER (
+        WHERE cancelled_at >= '{period.start.isoformat()}'::date
+          AND cancelled_at < '{period.end.isoformat()}'::date
+      )::int AS cancellations,
+      COUNT(DISTINCT subscription_id) FILTER (
+        WHERE cancelled_at >= '{period.start.isoformat()}'::date
+          AND cancelled_at < '{period.end.isoformat()}'::date
+      )::float / NULLIF(COUNT(DISTINCT subscription_id), 0) AS churn_rate,
+      COUNT(DISTINCT user_id) FILTER (WHERE recently_active)::float /
+        NULLIF(COUNT(DISTINCT user_id), 0) AS recent_activity_rate
+    FROM active_subscriptions
+    GROUP BY segment
+    ORDER BY segment
+    """
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Calculate observed churn and recent activity by {dimension}",
+        tables_used=["subscriptions", "users", "events"],
+        metrics_used=["churn_rate", "dau"],
+        assumptions=[
+            "Active subscriptions are measured at period start",
+            "Recent activity means qualifying activity in the trailing 30 days",
+            "Risk bands are descriptive signals, not predictive model output",
+        ],
+    )
+
+
+def compile_journeys(period: DateRange) -> SQLProposal:
+    journey_events = "('landing_page_viewed','signup_completed','onboarding_completed','checkout_started','payment_success','report_created','ai_assistant_used')"
+    query = f"""
+    WITH ordered_events AS (
+      SELECT e.user_id, e.event_name,
+        ROW_NUMBER() OVER (PARTITION BY e.user_id ORDER BY e.event_timestamp, e.event_id) AS step
+      FROM analytics.events e
+      WHERE {period_sql(period, 'e.event_timestamp')}
+        AND e.event_name IN {journey_events}
+    ), paths AS (
+      SELECT user_id,
+        CONCAT_WS(' → ',
+          MAX(event_name) FILTER (WHERE step=1),
+          MAX(event_name) FILTER (WHERE step=2),
+          MAX(event_name) FILTER (WHERE step=3),
+          MAX(event_name) FILTER (WHERE step=4),
+          MAX(event_name) FILTER (WHERE step=5)
+        ) AS path
+      FROM ordered_events
+      GROUP BY user_id
+    ), non_empty AS (
+      SELECT user_id, path FROM paths WHERE path <> ''
+    )
+    SELECT path, COUNT(*)::int AS users,
+      COUNT(*)::float / NULLIF(SUM(COUNT(*)) OVER (), 0) AS share
+    FROM non_empty
+    GROUP BY path
+    ORDER BY users DESC, path
+    LIMIT 10
+    """
+    return SQLProposal(
+        query=query.strip(),
+        purpose="Identify the ten most common five-step product journeys",
+        tables_used=["events"],
+        metrics_used=["journey_users"],
+        assumptions=["Only governed product lifecycle events are included", "Paths are limited to five steps"],
+    )
+
+
+def compile_stickiness(period: DateRange) -> SQLProposal:
+    activity_start = period.start - timedelta(days=29)
+    query = f"""
+    WITH activity AS (
+      SELECT DISTINCT date_trunc('day', e.event_timestamp)::date AS bucket, e.user_id
+      FROM analytics.events e
+      WHERE e.event_timestamp >= '{activity_start.isoformat()}'::date
+        AND e.event_timestamp < '{period.end.isoformat()}'::date
+        AND e.event_name IN {QUALIFYING_ACTIVITY}
+    ), daily AS (
+      SELECT bucket, COUNT(DISTINCT user_id)::int AS dau
+      FROM activity
+      WHERE bucket >= '{period.start.isoformat()}'::date
+      GROUP BY bucket
+    )
+    SELECT d.bucket::text AS period, d.dau,
+      (SELECT COUNT(DISTINCT a.user_id)::int FROM activity a
+       WHERE a.bucket > d.bucket - 7 AND a.bucket <= d.bucket) AS wau,
+      (SELECT COUNT(DISTINCT a.user_id)::int FROM activity a
+       WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket) AS mau,
+      d.dau::float / NULLIF((SELECT COUNT(DISTINCT a.user_id) FROM activity a
+        WHERE a.bucket > d.bucket - 7 AND a.bucket <= d.bucket), 0) AS dau_wau,
+      d.dau::float / NULLIF((SELECT COUNT(DISTINCT a.user_id) FROM activity a
+        WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket), 0) AS dau_mau,
+      (SELECT COUNT(*)::int FROM (
+        SELECT a.user_id
+        FROM activity a
+        WHERE a.bucket > d.bucket - 30 AND a.bucket <= d.bucket
+        GROUP BY a.user_id
+        HAVING COUNT(*) >= 10
+      ) power) AS power_users
+    FROM daily d
+    ORDER BY d.bucket
+    """
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Calculate daily stickiness and power users for {period.label}",
+        tables_used=["events"],
+        metrics_used=["dau", "wau", "mau", "stickiness", "power_users"],
+        assumptions=["Qualifying product activity defines active users", "Power users have activity on at least ten days in a trailing 30-day window"],
+    )
+
+
+def compile_revenue_cohorts(period: DateRange) -> SQLProposal:
+    query = f"""
+    WITH cohort_users AS (
+      SELECT u.user_id, u.signup_at, date_trunc('month', u.signup_at)::date AS cohort
+      FROM analytics.users u
+      WHERE {period_sql(period, 'u.signup_at')}
+    ), user_revenue AS (
+      SELECT c.cohort, c.user_id,
+        COALESCE(SUM(CASE WHEN t.status='success' THEN t.amount
+                          WHEN t.status='refunded' THEN -t.amount ELSE 0 END), 0)::float AS revenue
+      FROM cohort_users c
+      LEFT JOIN analytics.transactions t ON t.user_id=c.user_id
+        AND t.timestamp >= c.signup_at
+        AND t.timestamp >= '{period.start.isoformat()}'::date
+        AND t.timestamp < '{period.end.isoformat()}'::date
+      GROUP BY c.cohort, c.user_id
+    )
+    SELECT cohort::text AS cohort,
+      COUNT(*)::int AS cohort_size,
+      (cohort + interval '30 days' <= '{period.end.isoformat()}'::date) AS mature,
+      SUM(revenue)::float AS revenue,
+      SUM(revenue)::float / NULLIF(COUNT(*), 0) AS revenue_per_user,
+      COUNT(*) FILTER (WHERE revenue > 0)::int AS active_revenue_users
+    FROM user_revenue
+    GROUP BY cohort
+    ORDER BY cohort
+    """
+    return SQLProposal(
+        query=query.strip(),
+        purpose=f"Calculate observed revenue per user by monthly signup cohort for {period.label}",
+        tables_used=["users", "transactions"],
+        metrics_used=["revenue", "ltv"],
+        assumptions=[
+            "LTV is observed revenue per signed-up user through the period end",
+            "Refunds are subtracted from revenue",
+            "Immature cohorts are labeled, never treated as zero",
+        ],
+    )
 
 
 def segment_parts(dimension: str | None) -> tuple[str, str]:

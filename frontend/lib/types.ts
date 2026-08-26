@@ -52,6 +52,105 @@ export type OverviewResponse = {
   retention_snapshot: { heatmap: { x_labels: string[]; y_labels: string[]; matrix: (number | null)[][]; cohort_sizes: number[] } };
 };
 
+export type ExperimentSummary = {
+  experiment_key: string;
+  name: string;
+  hypothesis: string;
+  primary_metric: string;
+  primary_metric_label: string;
+  control_variant: string;
+  variants: string[];
+  status: "draft" | "running" | "paused" | "completed";
+  started_at: string;
+  ended_at: string | null;
+};
+
+export type ExperimentListResponse = {
+  type: "experiment_list";
+  dataset_as_of: string;
+  experiments: ExperimentSummary[];
+  sql: ProactiveSQLTransparency | null;
+  execution_ms: number;
+};
+
+export type ExperimentVariantResult = {
+  variant: string;
+  is_control: boolean;
+  sample_size: number;
+  conversions: number;
+  conversion_rate: number | null;
+  formatted_conversion_rate: string;
+};
+
+export type ExperimentComparison = {
+  variant: string;
+  control_variant: string;
+  control_sample_size: number;
+  variant_sample_size: number;
+  control_conversion_rate: number | null;
+  variant_conversion_rate: number | null;
+  absolute_uplift: number | null;
+  relative_uplift: number | null;
+  confidence_interval_low: number | null;
+  confidence_interval_high: number | null;
+  p_value: number | null;
+  statistically_significant: boolean;
+  significance_note: string;
+};
+
+export type ExperimentAnalysisResponse = {
+  type: "experiment_analysis";
+  experiment: ExperimentSummary;
+  period: DateRange;
+  dataset_as_of: string;
+  variants: ExperimentVariantResult[];
+  comparisons: ExperimentComparison[];
+  methodology: {
+    assignment_unit: "user";
+    confidence_level: number;
+    alpha: number;
+    minimum_sample_size: number;
+    significance_test: string;
+    conversion_definition: string;
+    period_end_exclusive: boolean;
+  };
+  sql: ProactiveSQLTransparency;
+  warnings: string[];
+  metadata: ProactiveMetadata;
+};
+
+export type ChurnRiskRow = {
+  dimension: "plan" | "company_size" | "channel";
+  segment: string;
+  active_subscriptions: number;
+  cancellations: number;
+  churn_rate: number | null;
+  recent_activity_rate: number | null;
+  risk_band: "low" | "medium" | "high" | "unavailable";
+};
+
+export type AdvancedAnalyticsResponse = {
+  type: "advanced_analytics";
+  period: DateRange;
+  dataset_as_of: string;
+  churn_risk: ChurnRiskRow[];
+  journeys: { path: string; users: number; share: number }[];
+  stickiness: { period: string; dau: number; wau: number; mau: number; dau_wau: number | null; dau_mau: number | null; power_users: number }[];
+  revenue_cohorts: { cohort: string; cohort_size: number; mature: boolean; revenue: number; revenue_per_user: number | null; active_revenue_users: number }[];
+  methodology: {
+    analysis_period: DateRange;
+    churn_definition: string;
+    recent_activity_window_days: number;
+    journey_max_steps: number;
+    power_user_definition: string;
+    ltv_definition: string;
+    retention_caveat: string;
+  };
+  sql: ProactiveSQLTransparency;
+  warnings: string[];
+  metadata: ProactiveMetadata;
+};
+
 export type FeatureAdoptionRow = {
   feature: string;
   eligible_users: number;

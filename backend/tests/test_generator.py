@@ -47,3 +47,29 @@ def test_generator_keeps_all_facts_inside_exclusive_dataset_boundary() -> None:
     # Keep this assertion explicit so a future timestamp refactor cannot
     # silently return naive datetimes that bypass UTC comparisons.
     assert all(isinstance(row[4], datetime) and row[4].tzinfo is not None for row in events)
+
+
+def test_generator_emits_a_reproducible_onboarding_experiment_with_variant_lift() -> None:
+    generator = DatasetGenerator(PROFILES["smoke"])
+    assignments = generator.experiment_assignments()
+    events = list(generator.events())
+
+    assert generator.experiments()[0][1] == "onboarding-redesign"
+    assert {str(row[2]) for row in assignments} == {"control", "variant"}
+
+    user_events: dict[int, set[str]] = defaultdict(set)
+    for row in events:
+        user_events[int(row[1])].add(str(row[3]))
+
+    denominators: Counter[str] = Counter()
+    conversions: Counter[str] = Counter()
+    for _, user_id, variant, _ in assignments:
+        facts = user_events[int(user_id)]
+        if "signup_completed" not in facts:
+            continue
+        denominators[str(variant)] += 1
+        conversions[str(variant)] += int("onboarding_completed" in facts)
+
+    assert denominators["control"] >= 100
+    assert denominators["variant"] >= 100
+    assert conversions["variant"] / denominators["variant"] > conversions["control"] / denominators["control"]

@@ -31,3 +31,11 @@ def test_catalog_exposes_column_metadata_and_dataset_row_counts() -> None:
     assert events["row_count"] == 12_345
     assert users["column_metadata"][0]["data_type"] == "bigint"
     assert users["column_metadata"][0]["pii"] is False
+
+
+def test_phase39_experiment_views_are_present_and_pii_free() -> None:
+    assert {"experiments", "experiment_assignments"}.issubset(registry.tables)
+    assert registry.tables["experiments"].pii_columns == []
+    assert registry.tables["experiment_assignments"].pii_columns == []
+    assert registry.dimensions["experiment"].table == "experiments"
+    assert registry.dimensions["experiment_variant"].table == "experiment_assignments"

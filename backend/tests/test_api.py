@@ -3,24 +3,42 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.routes import analytics_service, database_service, proactive_service
+from app.api.routes import (
+    advanced_service,
+    analytics_service,
+    database_service,
+    experiment_service,
+    proactive_service,
+)
 from app.main import app
 from app.models.contracts import (
     AcquisitionAnalyticsResponse,
     AcquisitionSegment,
+    AdvancedAnalyticsResponse,
+    AdvancedMethodology,
     AnomaliesResponse,
     AnomalyMethodology,
     AnomalyRecord,
+    ChurnRiskRow,
     DateRange,
     Evidence,
+    ExperimentAnalysisResponse,
+    ExperimentComparison,
+    ExperimentListResponse,
+    ExperimentMethodology,
+    ExperimentSummary,
+    ExperimentVariantResult,
     FeatureAdoptionAnalyticsResponse,
     FeatureAdoptionRow,
+    JourneyPath,
     OverviewAnalyticsResponse,
     ProactiveMetadata,
     ProactiveSQLTransparency,
     ProductPulseResponse,
     ReportSection,
     RetentionAnalyticsResponse,
+    RevenueCohortRow,
+    StickinessPoint,
     WeeklyReportResponse,
 )
 from app.security.session import hash_session
@@ -269,3 +287,119 @@ def test_proactive_routes_reject_invalid_periods_and_limits() -> None:
     assert client.get("/api/v1/insights/pulse", params={"limit": 51}).status_code == 422
     assert client.get("/api/v1/insights/anomalies", params={"period": "tomorrow"}).status_code == 422
     assert client.get("/api/v1/reports/weekly", params={"period": "last_30_days"}).status_code == 422
+
+
+def test_experiment_and_advanced_routes_return_typed_contracts() -> None:
+    period = DateRange(start=date(2026, 5, 26), end=date(2026, 8, 24), label="Last 90 Days")
+    summary = ExperimentSummary(
+        experiment_key="onboarding-redesign",
+        name="Onboarding redesign",
+        hypothesis="Reducing onboarding friction increases activation",
+        primary_metric="activation_rate",
+        primary_metric_label="Activation Rate",
+        control_variant="control",
+        variants=["control", "variant"],
+        status="completed",
+        started_at=date(2026, 5, 1),
+        ended_at=date(2026, 8, 24),
+    )
+    experiment_list = ExperimentListResponse(
+        dataset_as_of=date(2026, 8, 24),
+        experiments=[summary],
+        sql=ProactiveSQLTransparency(tables=["experiments"], metrics=[], query_count=1, validated=True),
+        execution_ms=1,
+    )
+    variants = [
+        ExperimentVariantResult(
+            variant="control", is_control=True, sample_size=200, conversions=80,
+            conversion_rate=0.4, formatted_conversion_rate="40.0%",
+        ),
+        ExperimentVariantResult(
+            variant="variant", is_control=False, sample_size=200, conversions=120,
+            conversion_rate=0.6, formatted_conversion_rate="60.0%",
+        ),
+    ]
+    comparison = ExperimentComparison(
+        variant="variant", control_variant="control", control_sample_size=200, variant_sample_size=200,
+        control_conversion_rate=0.4, variant_conversion_rate=0.6, absolute_uplift=0.2,
+        relative_uplift=0.5, confidence_interval_low=0.1, confidence_interval_high=0.3,
+        p_value=0.01, statistically_significant=True, significance_note="Significant",
+    )
+    experiment_analysis = ExperimentAnalysisResponse(
+        experiment=summary,
+        period=period,
+        dataset_as_of=date(2026, 8, 24),
+        variants=variants,
+        comparisons=[comparison],
+        methodology=ExperimentMethodology(
+            significance_test="z-test", conversion_definition="signup and onboarding", minimum_sample_size=100,
+        ),
+        sql=ProactiveSQLTransparency(tables=["events"], metrics=["activation_rate"], query_count=1, validated=True),
+        metadata=ProactiveMetadata(generated_at="2026-08-26T00:00:00Z", execution_ms=1),
+    )
+    advanced = AdvancedAnalyticsResponse(
+        period=period,
+        dataset_as_of=date(2026, 8, 24),
+        churn_risk=[ChurnRiskRow(
+            dimension="channel", segment="Paid Social", active_subscriptions=100,
+            cancellations=12, churn_rate=0.12, recent_activity_rate=0.65, risk_band="medium",
+        )],
+        journeys=[JourneyPath(path="signup_completed → onboarding_completed", users=20, share=1)],
+        stickiness=[StickinessPoint(
+            period="2026-08-23", dau=10, wau=20, mau=30, dau_wau=0.5, dau_mau=1 / 3, power_users=2,
+        )],
+        revenue_cohorts=[RevenueCohortRow(
+            cohort="2026-08-01", cohort_size=100, mature=False, revenue=2000,
+            revenue_per_user=20, active_revenue_users=50,
+        )],
+        methodology=AdvancedMethodology(
+            analysis_period=period,
+            churn_definition="Observed cancellations / active subscriptions",
+            recent_activity_window_days=30,
+            journey_max_steps=5,
+            power_user_definition="Ten active days",
+            ltv_definition="Observed revenue per signup",
+            retention_caveat="Immature cohorts are unavailable",
+        ),
+        sql=ProactiveSQLTransparency(tables=["events", "subscriptions"], metrics=["dau"], query_count=6, validated=True),
+        metadata=ProactiveMetadata(generated_at="2026-08-26T00:00:00Z", execution_ms=1),
+    )
+
+    class StubExperiments:
+        def list_experiments(self) -> ExperimentListResponse:
+            return experiment_list
+
+        def analysis(self, experiment_key: str, period_name: str) -> ExperimentAnalysisResponse:
+            assert experiment_key == "onboarding-redesign"
+            if period_name != "last_90_days":
+                raise ValueError("Experiment analysis supports last_90_days")
+            return experiment_analysis
+
+    class StubAdvanced:
+        def report(self, period_name: str) -> AdvancedAnalyticsResponse:
+            if period_name != "last_90_days":
+                raise ValueError("Advanced analytics supports last_90_days")
+            return advanced
+
+    app.dependency_overrides[experiment_service] = lambda: StubExperiments()  # type: ignore[assignment]
+    app.dependency_overrides[advanced_service] = lambda: StubAdvanced()  # type: ignore[assignment]
+    try:
+        catalog_response = client.get("/api/v1/experiments")
+        analysis_response = client.get("/api/v1/experiments/onboarding-redesign/analysis")
+        advanced_response = client.get("/api/v1/analytics/advanced")
+        invalid_experiment = client.get(
+            "/api/v1/experiments/onboarding-redesign/analysis",
+            params={"period": "last_7_days"},
+        )
+        invalid_advanced = client.get("/api/v1/analytics/advanced", params={"period": "last_week"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert catalog_response.status_code == 200
+    assert catalog_response.json()["type"] == "experiment_list"
+    assert analysis_response.status_code == 200
+    assert analysis_response.json()["comparisons"][0]["absolute_uplift"] == 0.2
+    assert advanced_response.status_code == 200
+    assert advanced_response.json()["type"] == "advanced_analytics"
+    assert invalid_experiment.status_code == 422
+    assert invalid_advanced.status_code == 422

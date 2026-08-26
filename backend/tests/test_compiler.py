@@ -2,10 +2,16 @@ import pytest
 
 from app.analytics.sql_compiler import (
     compile_acquisition,
+    compile_churn_risk,
+    compile_experiment_analysis,
+    compile_experiments,
     compile_feature_adoption,
     compile_funnel,
+    compile_journeys,
     compile_metric,
     compile_retention_curve,
+    compile_revenue_cohorts,
+    compile_stickiness,
 )
 from app.analytics.time_ranges import resolve_period
 from app.models.contracts import Filter
@@ -147,3 +153,49 @@ def test_windowed_retention_uses_mature_return_windows(metric: str, start_day: i
     assert f"interval '{start_day} days'" in proposal.query
     assert f"interval '{end_day} days'" in proposal.query
     assert "NULL" not in proposal.query.split("SELECT", 1)[-1] or "NULLIF" in proposal.query
+
+
+def test_payment_failures_metric_is_governed_by_checkout_sessions() -> None:
+    proposal = compile_metric("payment_failures", resolve_period("last_30_days"), "checkout_context")
+    validation = SQLValidator().validate(proposal.query)
+
+    assert validation.valid, validation.errors
+    assert "payment_failed" in proposal.query
+    assert "checkout_started" in proposal.query
+    assert "COUNT(*) FILTER (WHERE failed)" in proposal.query
+
+
+def test_experiment_and_advanced_compilers_are_bounded_and_allowlisted() -> None:
+    period = resolve_period("last_90_days")
+    proposals = [
+        compile_experiments(),
+        compile_experiment_analysis("onboarding-redesign", period, "activation_rate"),
+        compile_journeys(period),
+        compile_stickiness(period),
+        compile_revenue_cohorts(period),
+        *(compile_churn_risk(period, dimension) for dimension in ("plan", "company_size", "channel")),
+    ]
+
+    for proposal in proposals:
+        validation = SQLValidator().validate(proposal.query)
+        assert validation.valid, f"{proposal.purpose}: {validation.errors}"
+        assert validation.limited is True or "LIMIT" in proposal.query.upper()
+
+
+@pytest.mark.parametrize("metric", ["activation_rate", "checkout_conversion", "payment_success_rate"])
+def test_experiment_compiler_allowlists_primary_metrics(metric: str) -> None:
+    proposal = compile_experiment_analysis("onboarding-redesign", resolve_period("last_90_days"), metric)
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert proposal.metrics_used == [metric]
+
+
+def test_experiment_and_advanced_compilers_reject_ungoverned_inputs() -> None:
+    period = resolve_period("last_90_days")
+
+    with pytest.raises(ValueError, match="not supported"):
+        compile_experiment_analysis("onboarding-redesign", period, "revenue")
+    with pytest.raises(ValueError, match="not supported"):
+        compile_churn_risk(period, "browser")
+    with pytest.raises(ValueError, match="invalid"):
+        compile_experiment_analysis("", period, "activation_rate")

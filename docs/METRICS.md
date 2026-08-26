@@ -21,6 +21,11 @@ Metric definitions live in one validated registry. Rates specify their entity, n
 - Monthly retention: activity during days 30–59 after signup (the D30–D59 window).
 - A weekly/monthly cohort is immature until the full return window is observable; immature values are `null`, never zero.
 - Feature adoption: active eligible users using the feature divided by eligible active users.
+- Experiment activation: assigned users who complete signup and then onboarding within seven days of signup; experiment comparisons use recorded user assignments only.
+- Experiment uplift: variant conversion minus control conversion (absolute), with relative uplift reported separately as absolute uplift divided by control conversion.
+- Churn-risk signal: observed cancellations divided by subscriptions active at period start, paired with recent qualifying activity; the resulting band is descriptive and not a predictive score.
+- Stickiness: daily active users divided by trailing seven-day active users (`DAU / WAU`) and trailing thirty-day active users (`DAU / MAU`). Power users have qualifying activity on at least ten distinct days in a trailing thirty-day window.
+- Observed LTV: net successful charges and renewals less refunds per signed-up user through the period end. Revenue cohorts are marked immature until thirty days are observable; immature values are unavailable, not zero, and no forecast is claimed.
 
 Diagnostic dimensions are derived, governed views rather than free-form SQL fields:
 
@@ -37,3 +42,5 @@ Association results must use “associated with,” “correlated with,” or �
 Anomaly detection compiles governed daily UTC series for revenue, signups, activation, checkout conversion, payment success, payment failures, churn, and DAU. It evaluates a 90-day analysis horizon with a 28-day trailing baseline, requires at least 14 baseline observations and a 100-entity sample, and flags movement only when both the z-score and metric-specific relative-change thresholds are crossed. Consecutive same-direction flags are collapsed into explainable episodes with warning or critical severity. Product Pulse uses fixed diagnostic dimensions from the registry; it never accepts arbitrary dimensions or user-supplied SQL.
 
 Weekly report metrics are deterministic and cached on demand by request, policy version, and dataset version. An optional single grounded provider interpretation may refine report prose only; provider failure or grounding rejection returns deterministic wording. Retention values remain unavailable for immature cohorts rather than being treated as zero.
+
+Experiment and advanced analytics use the same SQLGlot/read-only boundary and dataset-version cache. Experiment analysis is limited to the catalogued onboarding-redesign flow in this milestone, with a two-sided two-proportion z-test, normal-approximation confidence interval, and a minimum sample warning. Journey analytics uses only the fixed lifecycle event vocabulary and a five-step cap; churn dimensions are limited to plan, company size, and acquisition channel.

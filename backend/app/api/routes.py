@@ -11,6 +11,8 @@ from app.ai.pipeline import CopilotPipeline
 from app.ai.planner import QuestionPlanner
 from app.ai.providers import ProviderRouter
 from app.ai.sql_generation import SQLGenerator
+from app.analytics.advanced import AdvancedAnalyticsService
+from app.analytics.experiments import ExperimentAnalyticsService
 from app.analytics.proactive import ProactiveAnalyticsService
 from app.analytics.service import AnalyticsService
 from app.config import Settings, get_settings
@@ -18,10 +20,13 @@ from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
     AcquisitionAnalyticsResponse,
     AcquisitionRequest,
+    AdvancedAnalyticsResponse,
     AnalyticsRequest,
     AnomaliesResponse,
     CopilotRequest,
     CopilotResponse,
+    ExperimentAnalysisResponse,
+    ExperimentListResponse,
     FeatureAdoptionAnalyticsResponse,
     FunnelRequest,
     OverviewAnalyticsResponse,
@@ -86,6 +91,16 @@ def proactive_service() -> ProactiveAnalyticsService:
         report_budget_ms=settings.proactive_report_budget_ms,
         report_provider_timeout_ms=settings.report_provider_timeout_ms,
     )
+
+
+@lru_cache
+def experiment_service() -> ExperimentAnalyticsService:
+    return ExperimentAnalyticsService(database_service(), sql_validator())
+
+
+@lru_cache
+def advanced_service() -> AdvancedAnalyticsService:
+    return AdvancedAnalyticsService(database_service(), sql_validator())
 
 
 @router.get("/health")
@@ -249,6 +264,45 @@ def weekly_report(
 ) -> WeeklyReportResponse:
     try:
         return service.weekly_report(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/experiments", response_model=ExperimentListResponse)
+def experiments(
+    service: ExperimentAnalyticsService = Depends(experiment_service),
+) -> ExperimentListResponse:
+    try:
+        return service.list_experiments()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/experiments/{experiment_key}/analysis", response_model=ExperimentAnalysisResponse)
+def experiment_analysis(
+    experiment_key: str,
+    period: str = Query(default="last_90_days"),
+    service: ExperimentAnalyticsService = Depends(experiment_service),
+) -> ExperimentAnalysisResponse:
+    try:
+        return service.analysis(experiment_key, period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/analytics/advanced", response_model=AdvancedAnalyticsResponse)
+def advanced_analytics(
+    period: str = Query(default="last_90_days"),
+    service: AdvancedAnalyticsService = Depends(advanced_service),
+) -> AdvancedAnalyticsResponse:
+    try:
+        return service.report(period)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DatabaseUnavailable as exc:

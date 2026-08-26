@@ -1,4 +1,4 @@
-import type { CopilotResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
@@ -39,4 +39,16 @@ export function getWeeklyReport(period = "last_week") {
 
 export function weeklyReportMarkdownUrl(period = "last_week") {
   return `${API_URL}/reports/weekly/markdown?period=${encodeURIComponent(period)}`;
+}
+
+export function getExperiments() {
+  return api<ExperimentListResponse>("/experiments");
+}
+
+export function getExperimentAnalysis(experimentKey: string, period = "last_90_days") {
+  return api<ExperimentAnalysisResponse>(`/experiments/${encodeURIComponent(experimentKey)}/analysis?period=${encodeURIComponent(period)}`);
+}
+
+export function getAdvancedAnalytics(period = "last_90_days") {
+  return api<AdvancedAnalyticsResponse>(`/analytics/advanced?period=${encodeURIComponent(period)}`);
 }

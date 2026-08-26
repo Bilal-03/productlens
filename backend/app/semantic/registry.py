@@ -152,7 +152,7 @@ class SemanticRegistry:
                 table_hits.add(dimension.table)
 
         # A question without explicit catalog terms still gets the complete,
-        # compact approved catalog (five small views), never database metadata.
+        # compact approved catalog, never database metadata.
         selected_tables = set(self.tables) if not table_hits else set(table_hits)
         # Include one-hop related tables so joins can be generated without
         # asking the model to infer foreign-key names, while avoiding a broad

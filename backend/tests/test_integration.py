@@ -179,6 +179,38 @@ def test_full_profile_proactive_pulse_surfaces_checkout_incident() -> None:
     ]
 
 
+def test_experiment_and_advanced_analytics_execute_against_postgres() -> None:
+    experiments = client.get("/api/v1/experiments")
+    assert experiments.status_code == 200
+    experiment_payload = experiments.json()
+    assert experiment_payload["type"] == "experiment_list"
+    assert experiment_payload["experiments"]
+    experiment_key = experiment_payload["experiments"][0]["experiment_key"]
+
+    analysis = client.get(
+        f"/api/v1/experiments/{experiment_key}/analysis",
+        params={"period": "last_90_days"},
+    )
+    assert analysis.status_code == 200
+    analysis_payload = analysis.json()
+    assert analysis_payload["type"] == "experiment_analysis"
+    assert analysis_payload["sql"]["validated"] is True
+    assert {row["variant"] for row in analysis_payload["variants"]} >= {"control", "variant"}
+    assert analysis_payload["comparisons"]
+    assert analysis_payload["comparisons"][0]["variant"] == "variant"
+
+    advanced = client.get("/api/v1/analytics/advanced", params={"period": "last_90_days"})
+    assert advanced.status_code == 200
+    advanced_payload = advanced.json()
+    assert advanced_payload["type"] == "advanced_analytics"
+    assert advanced_payload["sql"]["validated"] is True
+    assert advanced_payload["sql"]["query_count"] == 6
+    assert advanced_payload["churn_risk"]
+    assert advanced_payload["journeys"]
+    assert advanced_payload["stickiness"]
+    assert advanced_payload["revenue_cohorts"]
+
+
 def test_analytics_reader_cannot_reach_source_or_operational_schemas() -> None:
     url = get_settings().analytics_database_url.replace("postgresql+psycopg", "postgresql")
     with psycopg.connect(url, autocommit=True) as connection, connection.cursor() as cursor:

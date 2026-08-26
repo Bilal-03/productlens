@@ -417,6 +417,134 @@ class ProactiveMetadata(BaseModel):
     output_tokens: int | None = None
 
 
+class ExperimentSummary(BaseModel):
+    experiment_key: str
+    name: str
+    hypothesis: str
+    primary_metric: str
+    primary_metric_label: str
+    control_variant: str
+    variants: list[str]
+    status: Literal["draft", "running", "paused", "completed"]
+    started_at: date
+    ended_at: date | None = None
+
+
+class ExperimentListResponse(BaseModel):
+    type: Literal["experiment_list"] = "experiment_list"
+    dataset_as_of: date
+    experiments: list[ExperimentSummary]
+    sql: ProactiveSQLTransparency | None = None
+    execution_ms: float = 0
+
+
+class ExperimentVariantResult(BaseModel):
+    variant: str
+    is_control: bool
+    sample_size: int
+    conversions: int
+    conversion_rate: float | None
+    formatted_conversion_rate: str
+
+
+class ExperimentComparison(BaseModel):
+    variant: str
+    control_variant: str
+    control_sample_size: int
+    variant_sample_size: int
+    control_conversion_rate: float | None
+    variant_conversion_rate: float | None
+    absolute_uplift: float | None
+    relative_uplift: float | None
+    confidence_interval_low: float | None
+    confidence_interval_high: float | None
+    p_value: float | None
+    statistically_significant: bool
+    significance_note: str
+
+
+class ExperimentMethodology(BaseModel):
+    assignment_unit: Literal["user"] = "user"
+    confidence_level: float = 0.95
+    alpha: float = 0.05
+    minimum_sample_size: int = 100
+    significance_test: str
+    conversion_definition: str
+    period_end_exclusive: bool = True
+
+
+class ExperimentAnalysisResponse(BaseModel):
+    type: Literal["experiment_analysis"] = "experiment_analysis"
+    experiment: ExperimentSummary
+    period: DateRange
+    dataset_as_of: date
+    variants: list[ExperimentVariantResult]
+    comparisons: list[ExperimentComparison]
+    methodology: ExperimentMethodology
+    sql: ProactiveSQLTransparency
+    warnings: list[str] = Field(default_factory=list)
+    metadata: ProactiveMetadata
+
+
+class ChurnRiskRow(BaseModel):
+    dimension: Literal["plan", "company_size", "channel"]
+    segment: str
+    active_subscriptions: int
+    cancellations: int
+    churn_rate: float | None
+    recent_activity_rate: float | None
+    risk_band: Literal["low", "medium", "high", "unavailable"]
+
+
+class JourneyPath(BaseModel):
+    path: str
+    users: int
+    share: float
+
+
+class StickinessPoint(BaseModel):
+    period: str
+    dau: int
+    wau: int
+    mau: int
+    dau_wau: float | None
+    dau_mau: float | None
+    power_users: int
+
+
+class RevenueCohortRow(BaseModel):
+    cohort: str
+    cohort_size: int
+    mature: bool
+    revenue: float
+    revenue_per_user: float | None
+    active_revenue_users: int
+
+
+class AdvancedMethodology(BaseModel):
+    analysis_period: DateRange
+    churn_definition: str
+    recent_activity_window_days: int
+    journey_max_steps: int
+    power_user_definition: str
+    ltv_definition: str
+    retention_caveat: str
+
+
+class AdvancedAnalyticsResponse(BaseModel):
+    type: Literal["advanced_analytics"] = "advanced_analytics"
+    period: DateRange
+    dataset_as_of: date
+    churn_risk: list[ChurnRiskRow]
+    journeys: list[JourneyPath]
+    stickiness: list[StickinessPoint]
+    revenue_cohorts: list[RevenueCohortRow]
+    methodology: AdvancedMethodology
+    sql: ProactiveSQLTransparency
+    warnings: list[str] = Field(default_factory=list)
+    metadata: ProactiveMetadata
+
+
 class AnomalyRecord(BaseModel):
     id: str
     metric: str

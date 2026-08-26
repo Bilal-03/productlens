@@ -18,6 +18,8 @@ const links = [
   { href: "/analytics/segments", label: "Segments", icon: BarChart3 },
   { href: "/analytics/feature-adoption", label: "Feature Adoption", icon: Target },
   { href: "/analytics/acquisition", label: "Acquisition", icon: TrendingUp },
+  { href: "/analytics/experiments", label: "Experiments", icon: Target },
+  { href: "/analytics/advanced", label: "Advanced Analytics", icon: BarChart3 },
   { section: "Data" },
   { href: "/data/metrics", label: "Metrics", icon: BookOpen },
   { href: "/data/catalog", label: "Data Catalog", icon: Database },

@@ -13,3 +13,5 @@ dimensions:
   customer_type: {label: Customer Type, column: transaction_type, expression: "CASE WHEN transaction_type = 'charge' THEN 'New Customer' ELSE 'Returning Customer' END", table: transactions, sample_values: [New Customer, Returning Customer], valid_metrics: [revenue]}
   revenue_motion: {label: Revenue Motion, column: transaction_type, table: transactions, sample_values: [charge, renewal, refund], valid_metrics: [revenue]}
   failure_reason: {label: Payment Failure Reason, column: failure_reason, table: transactions, sample_values: [card_declined, renewal_declined, insufficient_funds], valid_metrics: [revenue]}
+  experiment: {label: Experiment, column: experiment_key, table: experiments, sample_values: [onboarding-redesign]}
+  experiment_variant: {label: Experiment Variant, column: variant, table: experiment_assignments, sample_values: [control, variant]}

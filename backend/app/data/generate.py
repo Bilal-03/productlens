@@ -70,6 +70,9 @@ class DatasetGenerator:
         self.session_rows: list[tuple[Any, ...]] = []
         self.subscription_rows: list[tuple[Any, ...]] = []
         self.transaction_rows: list[tuple[Any, ...]] = []
+        self.experiment_rows: list[tuple[Any, ...]] = []
+        self.experiment_assignment_rows: list[tuple[Any, ...]] = []
+        self.user_experiment_variant: dict[int, str] = {}
         self.user_signup: list[datetime] = []
         self.user_channel: list[str] = []
         self.user_plan: list[str] = []
@@ -153,8 +156,41 @@ class DatasetGenerator:
             self.session_rows.append(build_session(offset + 1, weighted_user(self.rng, weights)))
         return self.session_rows
 
+    def experiments(self) -> list[tuple[Any, ...]]:
+        if self.experiment_rows:
+            return self.experiment_rows
+        self.users()
+        started_at = utc_at(date(2026, 5, 1))
+        self.experiment_rows.append(
+            (
+                1,
+                "onboarding-redesign",
+                "Onboarding redesign",
+                "Reducing onboarding friction increases activation",
+                "activation_rate",
+                "control",
+                "completed",
+                started_at,
+                self.data_end,
+            )
+        )
+        return self.experiment_rows
+
+    def experiment_assignments(self) -> list[tuple[Any, ...]]:
+        if self.experiment_assignment_rows:
+            return self.experiment_assignment_rows
+        self.experiments()
+        for user_id, signup_at in enumerate(self.user_signup, start=1):
+            if signup_at.date() < date(2026, 5, 1):
+                continue
+            variant = "variant" if user_id % 2 == 0 else "control"
+            self.user_experiment_variant[user_id] = variant
+            self.experiment_assignment_rows.append((1, user_id, variant, signup_at))
+        return self.experiment_assignment_rows
+
     def events(self) -> Iterator[tuple[Any, ...]]:
         sessions = self.sessions()
+        self.experiment_assignments()
         first_session: dict[int, int] = {}
         session_start: dict[int, datetime] = {}
         for row in sessions:
@@ -212,6 +248,8 @@ class DatasetGenerator:
                         if self.user_adopter[user_id - 1]:
                             yield emit("team_member_invited", 6, "/onboarding/team", "Team Invitations")
                         completion_probability = 0.72 if channel == "Paid Social" else 0.86 if channel == "Organic Search" else 0.82
+                        if self.user_experiment_variant.get(user_id) == "variant":
+                            completion_probability = 0.98
                         if self.rng.random() < completion_probability:
                             yield emit("onboarding_completed", 7, "/onboarding/complete")
 
@@ -365,18 +403,28 @@ def load_dataset(generator: DatasetGenerator, profile_name: str) -> dict[str, in
     with psycopg.connect(psycopg_url(settings.database_admin_url)) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "TRUNCATE core.transactions, core.subscriptions, core.events, core.sessions, core.users RESTART IDENTITY CASCADE"
+                "TRUNCATE core.experiment_assignments, core.experiments, core.transactions, core.subscriptions, core.events, core.sessions, core.users RESTART IDENTITY CASCADE"
             )
             cursor.execute("TRUNCATE operational.dataset_metadata, operational.result_cache")
         counts["users"] = copy_rows(connection, "core.users", ["user_id", "signup_at", "country", "region", "acquisition_channel", "campaign", "plan", "company_size", "signup_source"], generator.users())
         counts["sessions"] = copy_rows(connection, "core.sessions", ["session_id", "user_id", "started_at", "ended_at", "device", "browser", "operating_system", "channel", "campaign", "landing_page"], generator.sessions())
+        counts["experiments"] = copy_rows(connection, "core.experiments", ["experiment_id", "experiment_key", "name", "hypothesis", "primary_metric", "control_variant", "status", "started_at", "ended_at"], generator.experiments())
+        counts["experiment_assignments"] = copy_rows(connection, "core.experiment_assignments", ["experiment_id", "user_id", "variant", "assigned_at"], generator.experiment_assignments())
         counts["events"] = copy_rows(connection, "core.events", ["event_id", "user_id", "session_id", "event_name", "event_timestamp", "page", "feature", "properties"], generator.events())
         counts["subscriptions"] = copy_rows(connection, "core.subscriptions", ["subscription_id", "user_id", "plan", "status", "started_at", "trial_started_at", "trial_ended_at", "cancelled_at", "mrr", "billing_interval"], generator.subscriptions())
         counts["transactions"] = copy_rows(connection, "core.transactions", ["transaction_id", "user_id", "subscription_id", "timestamp", "amount", "currency", "status", "payment_method", "transaction_type", "failure_reason"], generator.transactions())
         with connection.cursor() as cursor:
-            for table in counts:
+            identity_columns = {
+                "users": "user_id",
+                "sessions": "session_id",
+                "experiments": "experiment_id",
+                "events": "event_id",
+                "subscriptions": "subscription_id",
+                "transactions": "transaction_id",
+            }
+            for table, identity_column in identity_columns.items():
                 cursor.execute(
-                    f"SELECT setval(pg_get_serial_sequence('core.{table}', '{table[:-1]}_id'), COALESCE((SELECT max({table[:-1]}_id) FROM core.{table}), 1))"
+                    f"SELECT setval(pg_get_serial_sequence('core.{table}', '{identity_column}'), COALESCE((SELECT max({identity_column}) FROM core.{table}), 1))"
                 )
             cursor.execute(
                 """INSERT INTO operational.dataset_metadata
