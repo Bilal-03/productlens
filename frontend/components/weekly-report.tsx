@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ArrowRight, BarChart3, Download, FileText, RefreshCw, ShieldAlert } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { getWeeklyReport, weeklyReportMarkdownUrl } from "@/lib/api";
+import { downloadWeeklyReportMarkdown, getWeeklyReport } from "@/lib/api";
 import type { AnomalyRecord, ReportMetric, WeeklyReportResponse } from "@/lib/types";
 import { Badge, Button, Card } from "@/components/ui";
 import { PageHeading } from "@/components/page-heading";
@@ -35,9 +36,24 @@ function ReportView({ report }: { report: WeeklyReportResponse }) {
 }
 
 export function WeeklyReport() {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const query = useQuery({ queryKey: ["weekly-report", "last_week"], queryFn: () => getWeeklyReport(), staleTime: 300_000 });
+  async function downloadMarkdown() {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadWeeklyReportMarkdown();
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : "Markdown export failed.");
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
   return <>
-    <PageHeading eyebrow="Proactive analytics" title="Weekly product report" description="A deterministic weekly readout of growth, activation, engagement, retention, revenue, and the signals worth investigating." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={15} className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button><Button asChild variant="secondary"><a href={weeklyReportMarkdownUrl()} target="_blank" rel="noreferrer"><Download size={15} /> Download Markdown</a></Button></div>} />
+    <PageHeading eyebrow="Proactive analytics" title="Weekly product report" description="A deterministic weekly readout of growth, activation, engagement, retention, revenue, and the signals worth investigating." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={15} className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button><Button variant="secondary" onClick={() => void downloadMarkdown()} disabled={isDownloading || query.isLoading}><Download size={15} /> {isDownloading ? "Preparing…" : "Download Markdown"}</Button></div>} />
+    {downloadError && <Card className="mb-5 border-[#ffd8dc] bg-[#fffafb] p-4 text-sm text-[#bd3446]" role="alert">Markdown export unavailable: {downloadError}</Card>}
     {query.isLoading && <div className="space-y-5"><div className="skeleton h-32"/><div className="grid gap-5 lg:grid-cols-2"><div className="skeleton h-64"/><div className="skeleton h-64"/><div className="skeleton h-64"/><div className="skeleton h-64"/></div></div>}
     {query.isError && <Card className="border-[#ffd8dc] bg-[#fffafb] p-6"><Badge tone="warning">Report unavailable</Badge><h2 className="mt-3 text-lg font-bold">The weekly report could not be loaded</h2><p className="mt-2 text-sm text-[#707786]">{query.error.message}</p><Button className="mt-5" variant="secondary" onClick={() => void query.refetch()}>Try again</Button></Card>}
     {query.data && <ReportView report={query.data} />}

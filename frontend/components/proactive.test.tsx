@@ -3,14 +3,14 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProductPulse } from "@/components/product-pulse";
 import { WeeklyReport } from "@/components/weekly-report";
-import { getProductPulse, getWeeklyReport, weeklyReportMarkdownUrl } from "@/lib/api";
+import { downloadWeeklyReportMarkdown, getProductPulse, getWeeklyReport } from "@/lib/api";
 import type { AnomalyMethodology, ProductPulseResponse, WeeklyReportResponse } from "@/lib/types";
 
 vi.mock("next/link", () => ({ default: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props}>{children}</a> }));
 vi.mock("@/lib/api", () => ({
   getProductPulse: vi.fn(),
   getWeeklyReport: vi.fn(),
-  weeklyReportMarkdownUrl: vi.fn(() => "https://api.example.test/reports/weekly/markdown?period=last_week"),
+  downloadWeeklyReportMarkdown: vi.fn(),
 }));
 
 const methodology: AnomalyMethodology = {
@@ -98,7 +98,7 @@ describe("proactive analytics surfaces", () => {
     renderWithQuery(<WeeklyReport />);
     expect(await screen.findByRole("heading", { name: "Weekly product report" })).toBeVisible();
     expect(await screen.findByText("Growth")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Download Markdown/ })).toHaveAttribute("href", "https://api.example.test/reports/weekly/markdown?period=last_week");
-    expect(weeklyReportMarkdownUrl).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Download Markdown/ })).toBeVisible();
+    expect(downloadWeeklyReportMarkdown).not.toHaveBeenCalled();
   });
 });

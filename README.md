@@ -2,7 +2,7 @@
 
 ProductLens AI is an AI-assisted product analytics workspace that turns natural-language business questions into validated analytical investigations. It combines a governed semantic metrics layer, AST-validated read-only SQL, deterministic product analytics, controlled visualizations, and evidence-backed recommendations.
 
-> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. Phase 39 experiment analytics and Phase 40 descriptive advanced analytics are live through the default 90-day surface. Phase 43 saved-analysis notebook and deterministic executive-summary work are live and smoke-tested; predictive/forecast analytics and P3 extensions remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
+> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. Phase 39 experiment analytics and Phase 40 descriptive advanced analytics are live through the default 90-day surface. Phase 43 saved-analysis notebook and deterministic executive-summary work are live and smoke-tested. The P3 access-boundary foundation is in progress; predictive/forecast analytics, enterprise SSO, tenant-level source isolation, streaming, connectors, and multi-agent orchestration remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
 
 ## Why it exists
 
@@ -21,6 +21,7 @@ It is deliberately not a generic chatbot or unrestricted text-to-SQL wrapper.
 - Gemini-first, Groq-fallback provider abstraction with deterministic degradation
 - Structured ad-hoc text-to-SQL with semantic schema retrieval and one safe repair attempt
 - Query transparency, anonymous-session history, audit logs, and confidence/caveats
+- Provider-neutral signed workspace access context with viewer/analyst/admin permissions
 - Explainable anomaly detection, Product Pulse, deterministic weekly reports, and Markdown export
 - Governed experiment comparisons plus deterministic churn-risk, journey, stickiness, power-user, and observed revenue-cohort analytics (Phase 39–40 first slice)
 - Session-scoped Analysis Notebook for pinning, reopening, and summarizing validated investigations (Phase 43)

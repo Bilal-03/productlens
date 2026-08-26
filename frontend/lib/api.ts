@@ -1,6 +1,7 @@
-import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AccessContextResponse, AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const ACCESS_TOKEN_KEY = "productlens-access-token";
 
 export function getSessionId(): string {
   if (typeof window === "undefined") return "server-render-session-id-placeholder";
@@ -10,14 +11,39 @@ export function getSessionId(): string {
   return value;
 }
 
+/** Store a short-lived assertion supplied by an external SSO callback. */
+export function setAccessToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  if (token) window.sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+  else window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+}
+
+export function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function getAccessHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { "X-ProductLens-Access": token } : {};
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const accessHeaders = getAccessHeaders();
+  for (const [key, value] of Object.entries(accessHeaders)) headers.set(key, value);
+  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.detail ?? `Request failed (${response.status})`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+export function getAccessContext() {
+  return api<AccessContextResponse>("/access/context");
 }
 
 export function analyze(question: string, mode: "quick" | "deep", selected_metric?: string) {
@@ -67,6 +93,25 @@ export function getWeeklyReport(period = "last_week") {
 
 export function weeklyReportMarkdownUrl(period = "last_week") {
   return `${API_URL}/reports/weekly/markdown?period=${encodeURIComponent(period)}`;
+}
+
+export async function downloadWeeklyReportMarkdown(period = "last_week") {
+  const response = await fetch(weeklyReportMarkdownUrl(period), { headers: getAccessHeaders() });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.detail ?? `Request failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition");
+  const filename = disposition?.match(/filename="([A-Za-z0-9._-]+)"/)?.[1] ?? "productlens-weekly-report.md";
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
 export function getExperiments() {

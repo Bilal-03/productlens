@@ -76,6 +76,16 @@ export type NotebookSummaryResponse = {
   warnings: string[];
 };
 
+export type AccessContextResponse = {
+  type: "access_context";
+  workspace_id: string;
+  subject_id: string;
+  role: "viewer" | "analyst" | "admin";
+  auth_mode: "anonymous" | "signed";
+  permissions: string[];
+  session_scoped: boolean;
+};
+
 export type ClarificationResponse = { type: "clarification"; question: string; reason: string; options: { metric: string; label: string; definition: string }[] };
 export type ErrorResponse = { type: "error"; code: string; message: string; retryable: boolean; query_id?: string };
 export type CopilotResponse = AnalysisResponse | ClarificationResponse | ErrorResponse;

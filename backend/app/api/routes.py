@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from uuid import UUID
 
@@ -18,11 +19,13 @@ from app.analytics.service import AnalyticsService
 from app.config import Settings, get_settings
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
+    AccessContextResponse,
     AcquisitionAnalyticsResponse,
     AcquisitionRequest,
     AdvancedAnalyticsResponse,
     AnalyticsRequest,
     AnomaliesResponse,
+    AuthMode,
     CopilotRequest,
     CopilotResponse,
     ExperimentAnalysisResponse,
@@ -41,11 +44,40 @@ from app.models.contracts import (
     WeeklyReportResponse,
 )
 from app.notebook.service import NotebookService
+from app.security.access import AccessContext, AccessTokenError, Permission, resolve_access_context
 from app.security.session import hash_session
 from app.security.sql_validator import SQLSafetyPolicy, SQLValidator
 from app.semantic.registry import registry
 
 router = APIRouter()
+
+
+def access_context(
+    x_productlens_access: str | None = Header(default=None, max_length=4096),
+    x_productlens_session: str | None = Header(default=None, max_length=128),
+    settings: Settings = Depends(get_settings),
+) -> AccessContext:
+    try:
+        return resolve_access_context(
+            access_token=x_productlens_access,
+            session_id=x_productlens_session,
+            settings=settings,
+        )
+    except AccessTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired workspace access token") from exc
+
+
+def require_permission(permission: str) -> Callable[[AccessContext], AccessContext]:
+    def dependency(context: AccessContext = Depends(access_context)) -> AccessContext:
+        if not context.can(permission):
+            raise HTTPException(status_code=403, detail="The workspace role does not allow this action")
+        return context
+
+    return dependency
+
+
+def session_hash_for(context: AccessContext, raw_session: str, settings: Settings) -> str:
+    return context.session_hash or hash_session(raw_session, settings.session_hmac_secret.get_secret_value())
 
 
 @lru_cache
@@ -113,13 +145,28 @@ def notebook_service() -> NotebookService:
     return NotebookService(database_service())
 
 
+@router.get("/access/context", response_model=AccessContextResponse)
+def access_context_info(context: AccessContext = Depends(access_context)) -> AccessContextResponse:
+    return AccessContextResponse(
+        workspace_id=context.workspace_id,
+        subject_id=context.subject_id,
+        role=context.role,
+        auth_mode=context.auth_mode,
+        permissions=sorted(context.permissions),
+        session_scoped=context.session_hash is not None,
+    )
+
+
 @router.get("/health")
 def health(database: DatabaseService = Depends(database_service)) -> dict[str, object]:
     return {"status": "ok" if database.health() else "degraded", "database": database.health(), "service": "productlens-api"}
 
 
 @router.get("/metadata/dataset")
-def dataset_metadata(database: DatabaseService = Depends(database_service)) -> dict[str, object]:
+def dataset_metadata(
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    database: DatabaseService = Depends(database_service),
+) -> dict[str, object]:
     try:
         return database.dataset_metadata()
     except DatabaseUnavailable as exc:
@@ -127,7 +174,10 @@ def dataset_metadata(database: DatabaseService = Depends(database_service)) -> d
 
 
 @router.get("/catalog")
-def catalog(database: DatabaseService = Depends(database_service)) -> dict[str, object]:
+def catalog(
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    database: DatabaseService = Depends(database_service),
+) -> dict[str, object]:
     try:
         metadata = database.dataset_metadata()
         raw_counts = metadata.get("row_counts")
@@ -140,7 +190,11 @@ def catalog(database: DatabaseService = Depends(database_service)) -> dict[str, 
 @router.post("/analytics/kpi")
 @router.post("/analytics/compare")
 @router.post("/analytics/segment")
-def metric_analysis(request: AnalyticsRequest, service: AnalyticsService = Depends(analytics_service)) -> dict[str, object]:
+def metric_analysis(
+    request: AnalyticsRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    service: AnalyticsService = Depends(analytics_service),
+) -> dict[str, object]:
     try:
         return service.metric(request)
     except ValueError as exc:
@@ -152,6 +206,7 @@ def metric_analysis(request: AnalyticsRequest, service: AnalyticsService = Depen
 @router.post("/analytics/feature-adoption", response_model=FeatureAdoptionAnalyticsResponse)
 def feature_adoption_analysis(
     request: AnalyticsRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: AnalyticsService = Depends(analytics_service),
 ) -> FeatureAdoptionAnalyticsResponse:
     try:
@@ -165,6 +220,7 @@ def feature_adoption_analysis(
 @router.post("/analytics/acquisition", response_model=AcquisitionAnalyticsResponse)
 def acquisition_analysis(
     request: AcquisitionRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: AnalyticsService = Depends(analytics_service),
 ) -> AcquisitionAnalyticsResponse:
     try:
@@ -178,6 +234,7 @@ def acquisition_analysis(
 @router.post("/analytics/overview", response_model=OverviewAnalyticsResponse)
 def overview_analysis(
     request: OverviewRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: AnalyticsService = Depends(analytics_service),
 ) -> OverviewAnalyticsResponse:
     try:
@@ -192,6 +249,7 @@ def overview_analysis(
 @router.post("/analytics/cohort", response_model=RetentionAnalyticsResponse)
 def retention_analysis(
     request: RetentionRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: AnalyticsService = Depends(analytics_service),
 ) -> RetentionAnalyticsResponse:
     try:
@@ -203,7 +261,11 @@ def retention_analysis(
 
 
 @router.post("/analytics/trend")
-def trend_analysis(request: AnalyticsRequest, service: AnalyticsService = Depends(analytics_service)) -> dict[str, object]:
+def trend_analysis(
+    request: AnalyticsRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    service: AnalyticsService = Depends(analytics_service),
+) -> dict[str, object]:
     try:
         return service.trend(request)
     except ValueError as exc:
@@ -213,7 +275,11 @@ def trend_analysis(request: AnalyticsRequest, service: AnalyticsService = Depend
 
 
 @router.post("/analytics/funnel")
-def funnel_analysis(request: FunnelRequest, service: AnalyticsService = Depends(analytics_service)) -> dict[str, object]:
+def funnel_analysis(
+    request: FunnelRequest,
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    service: AnalyticsService = Depends(analytics_service),
+) -> dict[str, object]:
     try:
         return service.funnel(request)
     except (ValueError, DatabaseUnavailable) as exc:
@@ -224,6 +290,7 @@ def funnel_analysis(request: FunnelRequest, service: AnalyticsService = Depends(
 def anomalies(
     period: str = Query(default="last_30_days"),
     limit: int = Query(default=50, ge=1, le=50),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ProactiveAnalyticsService = Depends(proactive_service),
 ) -> AnomaliesResponse:
     try:
@@ -238,6 +305,7 @@ def anomalies(
 def product_pulse(
     period: str = Query(default="last_30_days"),
     limit: int = Query(default=20, ge=1, le=50),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ProactiveAnalyticsService = Depends(proactive_service),
 ) -> ProductPulseResponse:
     try:
@@ -251,6 +319,7 @@ def product_pulse(
 @router.get("/reports/weekly/markdown")
 def weekly_report_markdown(
     period: str = Query(default="last_week"),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ProactiveAnalyticsService = Depends(proactive_service),
 ) -> PlainTextResponse:
     try:
@@ -270,6 +339,7 @@ def weekly_report_markdown(
 @router.get("/reports/weekly", response_model=WeeklyReportResponse)
 def weekly_report(
     period: str = Query(default="last_week"),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ProactiveAnalyticsService = Depends(proactive_service),
 ) -> WeeklyReportResponse:
     try:
@@ -282,6 +352,7 @@ def weekly_report(
 
 @router.get("/experiments", response_model=ExperimentListResponse)
 def experiments(
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ExperimentAnalyticsService = Depends(experiment_service),
 ) -> ExperimentListResponse:
     try:
@@ -296,6 +367,7 @@ def experiments(
 def experiment_analysis(
     experiment_key: str,
     period: str = Query(default="last_90_days"),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: ExperimentAnalyticsService = Depends(experiment_service),
 ) -> ExperimentAnalysisResponse:
     try:
@@ -309,6 +381,7 @@ def experiment_analysis(
 @router.get("/analytics/advanced", response_model=AdvancedAnalyticsResponse)
 def advanced_analytics(
     period: str = Query(default="last_90_days"),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
     service: AdvancedAnalyticsService = Depends(advanced_service),
 ) -> AdvancedAnalyticsResponse:
     try:
@@ -320,7 +393,13 @@ def advanced_analytics(
 
 
 @router.post("/copilot/analyze", response_model=CopilotResponse)
-def copilot_analyze(request: CopilotRequest, pipeline: CopilotPipeline = Depends(copilot_pipeline)) -> CopilotResponse:
+def copilot_analyze(
+    request: CopilotRequest,
+    pipeline: CopilotPipeline = Depends(copilot_pipeline),
+    context: AccessContext = Depends(require_permission(Permission.ANALYZE)),
+) -> CopilotResponse:
+    if context.auth_mode is AuthMode.SIGNED:
+        request = request.model_copy(update={"session_id": context.canonical_session_id(request.session_id)})
     return pipeline.analyze(request)
 
 
@@ -329,9 +408,10 @@ def history(
     x_productlens_session: str = Header(min_length=20, max_length=128),
     limit: int = Query(default=30, ge=1, le=100),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.HISTORY_READ)),
     database: DatabaseService = Depends(database_service),
 ) -> list[dict[str, object]]:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         return database.history(session_hash, limit)
     except DatabaseUnavailable as exc:
@@ -343,9 +423,10 @@ def history_item(
     query_id: UUID,
     x_productlens_session: str = Header(min_length=20, max_length=128),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.HISTORY_READ)),
     database: DatabaseService = Depends(database_service),
 ) -> dict[str, object]:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         item = database.history_item(session_hash, query_id)
     except DatabaseUnavailable as exc:
@@ -360,9 +441,10 @@ def notebook_insights(
     x_productlens_session: str = Header(min_length=20, max_length=128),
     limit: int = Query(default=50, ge=1, le=50),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.NOTEBOOK_READ)),
     service: NotebookService = Depends(notebook_service),
 ) -> NotebookResponse:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         return NotebookResponse(insights=service.list(session_hash, limit), limit=limit)
     except DatabaseUnavailable as exc:
@@ -374,9 +456,10 @@ def notebook_summary(
     x_productlens_session: str = Header(min_length=20, max_length=128),
     limit: int = Query(default=50, ge=1, le=50),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.NOTEBOOK_READ)),
     service: NotebookService = Depends(notebook_service),
 ) -> NotebookSummaryResponse:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         summary = service.summary(session_hash, limit)
         return NotebookSummaryResponse(
@@ -393,9 +476,10 @@ def save_notebook_insight(
     request: SaveInsightRequest,
     x_productlens_session: str = Header(min_length=20, max_length=128),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.NOTEBOOK_WRITE)),
     service: NotebookService = Depends(notebook_service),
 ) -> NotebookInsight:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         return service.save(session_hash, request.source_query_id, request.title)
     except LookupError as exc:
@@ -409,9 +493,10 @@ def delete_notebook_insight(
     insight_id: UUID,
     x_productlens_session: str = Header(min_length=20, max_length=128),
     settings: Settings = Depends(get_settings),
+    context: AccessContext = Depends(require_permission(Permission.NOTEBOOK_DELETE)),
     service: NotebookService = Depends(notebook_service),
 ) -> None:
-    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
         deleted = service.delete(session_hash, insight_id)
     except DatabaseUnavailable as exc:

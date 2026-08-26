@@ -50,6 +50,17 @@ Copilot result → session-authenticated source query ID → history ownership c
 
 Phase 43 stores a server-side snapshot of a validated `AnalysisResponse`. The client never posts arbitrary evidence or SQL: it submits only the source query ID, and the API hashes the anonymous session before reading history. The unique `(session_hash, source_query_id)` key makes saves idempotent; the `app_writer` role can manage only the operational notebook table. `GET /api/v1/notebook/summary` aggregates the saved snapshots in the session using deterministic, evidence-bound themes, findings, drivers, and recommendations. It does not rerun source SQL or generate new evidence, and every displayed summary item retains source insight and evidence IDs.
 
+## P3 access boundary
+
+```text
+Trusted SSO / edge gateway → plx1 signed assertion → access context + RBAC
+                           → canonical workspace session → operational history/notebook/quota state
+```
+
+The first P3 slice is an ingress and isolation boundary, not a complete identity product. `X-ProductLens-Access` carries a short-lived HMAC-signed assertion with workspace, subject, role, issue time, and expiry claims. FastAPI validates the assertion before applying explicit viewer/analyst/admin permissions. Signed operational sessions hash workspace, subject, and the browser session together, so two workspaces cannot share history or notebook state. The browser client has an optional session-storage bridge for a future SSO callback; the API never issues tokens.
+
+The current synthetic analytics views remain a shared demo dataset. Dataset-level tenant isolation will be added only with connector-backed source registration and a tenant-aware analytics boundary. Streaming ingestion, external connectors, enterprise SSO provisioning, multi-agent orchestration, and additional ML models remain the next P3 work rather than claims of this foundation.
+
 ## Boundaries
 
 - `frontend`: presentation, interaction, controlled Plotly rendering.

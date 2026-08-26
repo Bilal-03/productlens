@@ -28,6 +28,7 @@ REQUIRED_ENV_KEYS = (
     "ANALYTICS_DATABASE_URL",
     "FRONTEND_ORIGIN",
     "SESSION_HMAC_SECRET",
+    "ACCESS_TOKEN_SECRET",
     "NEXT_PUBLIC_API_URL",
 )
 IGNORED_DIRS = {
@@ -84,8 +85,9 @@ def _check(max_backend_mb: float, max_frontend_mb: float, require_frontend_build
             for key in ("GEMINI_API_KEY", "GROQ_API_KEY"):
                 if env_values.get(key, "") and not env_values[key].startswith("replace-"):
                     errors.append(f".env.example must not contain a live {key}")
-            if env_values.get("SESSION_HMAC_SECRET", "").startswith("replace-") is False:
-                errors.append(".env.example SESSION_HMAC_SECRET must remain a placeholder")
+            for key in ("SESSION_HMAC_SECRET", "ACCESS_TOKEN_SECRET"):
+                if env_values.get(key, "").startswith("replace-") is False:
+                    errors.append(f".env.example {key} must remain a placeholder")
 
     vercel_path = ROOT / "backend/vercel.json"
     if vercel_path.is_file():

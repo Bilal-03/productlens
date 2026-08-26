@@ -28,6 +28,17 @@ class AnalysisMode(StrEnum):
     DEEP = "deep"
 
 
+class WorkspaceRole(StrEnum):
+    VIEWER = "viewer"
+    ANALYST = "analyst"
+    ADMIN = "admin"
+
+
+class AuthMode(StrEnum):
+    ANONYMOUS = "anonymous"
+    SIGNED = "signed"
+
+
 class DateRange(BaseModel):
     start: date
     end: date = Field(description="Exclusive UTC end date")
@@ -273,6 +284,16 @@ class NotebookSummaryResponse(BaseModel):
     insight_count: int
     limit: int
     warnings: list[str] = Field(default_factory=list)
+
+
+class AccessContextResponse(BaseModel):
+    type: Literal["access_context"] = "access_context"
+    workspace_id: str
+    subject_id: str
+    role: WorkspaceRole
+    auth_mode: AuthMode
+    permissions: list[str]
+    session_scoped: bool
 
 
 class ClarificationOption(BaseModel):

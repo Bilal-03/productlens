@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
     groq_model: str = "openai/gpt-oss-20b"
+    access_token_secret: SecretStr | None = None
     ai_requests_per_session_hour: int = Field(default=10, ge=1, le=1000)
     ai_requests_global_day: int = Field(default=100, ge=1, le=100_000)
     result_cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)
