@@ -12,7 +12,7 @@ from app.analytics.sql_compiler import (
     compile_metric,
     compile_retention_curve,
 )
-from app.analytics.time_ranges import DATASET_AS_OF, default_comparison, resolve_period
+from app.analytics.time_ranges import default_comparison, resolve_period, source_as_of
 from app.database.service import DatabaseService
 from app.models.contracts import (
     AcquisitionAnalyticsResponse,
@@ -50,6 +50,9 @@ class AnalyticsService:
         rows, elapsed = self.database.execute_readonly(validation)
         return rows, validation.normalized_query or proposal.query, elapsed
 
+    def _dataset_as_of(self) -> date:
+        return source_as_of(self.database)
+
     def metric(self, request: AnalyticsRequest) -> dict[str, Any]:
         if request.metric == "feature_adoption":
             return self.feature_adoption(request)
@@ -59,9 +62,10 @@ class AnalyticsService:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
                 return cached
+        as_of = self._dataset_as_of()
         registry.validate_dimension(request.metric, request.dimension)
-        current_period = resolve_period(request.period)
-        previous_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        current_period = resolve_period(request.period, as_of)
+        previous_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
         current, current_sql, current_ms = self.execute(
             compile_metric(request.metric, current_period, request.dimension, request.filters)
         )
@@ -76,7 +80,7 @@ class AnalyticsService:
             "metric": registry.metric(request.metric).model_dump(),
             "current_period": current_period.model_dump(),
             "comparison_period": previous_period.model_dump() if previous_period else None,
-            "dataset_as_of": DATASET_AS_OF.isoformat(),
+            "dataset_as_of": as_of.isoformat(),
             "current": current,
             "previous": previous,
             "sql": {"current": current_sql, "previous": previous_sql},
@@ -93,8 +97,9 @@ class AnalyticsService:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
                 return cached
-        period = resolve_period(request.period)
-        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
+        comparison_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
         current_proposal = compile_acquisition(period, request.dimension, request.filters)
         current_rows, current_sql, current_ms = self.execute(current_proposal)
         previous_rows: list[dict[str, Any]] = []
@@ -132,7 +137,7 @@ class AnalyticsService:
         payload = AcquisitionAnalyticsResponse(
             period=period,
             comparison_period=comparison_period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             dimension=request.dimension,
             segments=[AcquisitionSegment.model_validate(item) for item in current_segments],
             sql=SQLTransparency(
@@ -159,8 +164,9 @@ class AnalyticsService:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
                 return cached
-        period = resolve_period(request.period)
-        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
+        comparison_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
         current_proposal = compile_metric("feature_adoption", period, request.dimension or "feature", request.filters)
         current_rows, current_sql, current_ms = self.execute(current_proposal)
         previous_rows: list[dict[str, Any]] = []
@@ -209,7 +215,7 @@ class AnalyticsService:
         payload = FeatureAdoptionAnalyticsResponse(
             period=period,
             comparison_period=comparison_period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             dimension=request.dimension or "feature",
             rows=current,
             sql=SQLTransparency(
@@ -234,8 +240,9 @@ class AnalyticsService:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
                 return cached
-        period = resolve_period(request.period)
-        comparison_period = default_comparison(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
+        comparison_period = default_comparison(request.period, as_of)
         kpi_period = request.period
         kpi_names = ["mau", "activation_rate", "checkout_conversion", "mrr", "d30_retention", "churn_rate"]
         with ThreadPoolExecutor(max_workers=4) as executor:
@@ -276,7 +283,7 @@ class AnalyticsService:
         payload = OverviewAnalyticsResponse(
             period=period,
             comparison_period=comparison_period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             kpis=kpis,
             revenue_trend=revenue_trend,
             user_growth_trend=user_growth_trend,
@@ -295,8 +302,9 @@ class AnalyticsService:
             cached = self.database.cache_get(cache_key, dataset_version)
             if cached is not None:
                 return cached
-        period = resolve_period(request.period)
-        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
+        comparison_period = resolve_period(request.comparison, as_of) if request.comparison else default_comparison(request.period, as_of)
         rows, sql, elapsed = self.execute(
             compile_funnel(request.funnel, period, request.dimension, request.filters)
         )
@@ -327,7 +335,7 @@ class AnalyticsService:
             "funnel": request.funnel,
             "period": period.model_dump(),
             "comparison_period": comparison_period.model_dump() if comparison_period else None,
-            "dataset_as_of": DATASET_AS_OF.isoformat(),
+            "dataset_as_of": as_of.isoformat(),
             "segments": enrich(rows),
             "previous_segments": enrich(previous_rows) if previous_rows else {},
             "sql": sql + (f"\n\n-- Comparison\n{previous_sql}" if previous_sql else ""),
@@ -338,7 +346,8 @@ class AnalyticsService:
         return payload
 
     def trend(self, request: AnalyticsRequest) -> dict[str, Any]:
-        period = resolve_period(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
         duration = (period.end - period.start).days
         step = 7 if duration > 45 else 1
         buckets: list[tuple[date, date]] = []
@@ -373,7 +382,7 @@ class AnalyticsService:
         return {
             "metric": registry.metric(request.metric).model_dump(),
             "period": period.model_dump(),
-            "dataset_as_of": DATASET_AS_OF.isoformat(),
+            "dataset_as_of": as_of.isoformat(),
             "dimension": request.dimension,
             "points": points,
             "sql": sql_fragments,
@@ -391,7 +400,8 @@ class AnalyticsService:
         windows = sorted(set(request.windows))
         if not windows or any(day not in {1, 7, 30} for day in windows):
             raise ValueError("Retention windows must be selected from D1, D7, and D30")
-        period = resolve_period(request.period)
+        as_of = self._dataset_as_of()
+        period = resolve_period(request.period, as_of)
         registry.validate_dimension("d30_retention", request.dimension)
         heatmap_proposal = compile_retention_curve(
             period,
@@ -446,7 +456,7 @@ class AnalyticsService:
         payload_model = RetentionAnalyticsResponse(
             cohort_type=request.cohort_type,
             period=period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             dimension=request.dimension,
             windows=[
                 RetentionWindow(day=day, label=f"D{day} Retention", metric=f"d{day}_retention")

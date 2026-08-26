@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from app.analytics.sql_compiler import compile_experiment_analysis, compile_experiments
-from app.analytics.time_ranges import DATASET_AS_OF, resolve_period
+from app.analytics.time_ranges import resolve_period, source_as_of
 from app.database.service import DatabaseService
 from app.models.contracts import (
     ExperimentAnalysisResponse,
@@ -49,6 +49,7 @@ class ExperimentAnalyticsService:
 
     def list_experiments(self) -> ExperimentListResponse:
         started = time.perf_counter()
+        as_of = source_as_of(self.database)
         dataset_version = self.database.dataset_version()
         cache_key = self._cache_key("experiment-list", {})
         if dataset_version:
@@ -60,7 +61,7 @@ class ExperimentAnalyticsService:
         rows, validation = self._execute(proposal)
         experiments = [self._summary_from_row(row) for row in rows]
         response = ExperimentListResponse(
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             experiments=experiments,
             sql=ProactiveSQLTransparency(
                 tables=validation.tables,
@@ -79,7 +80,8 @@ class ExperimentAnalyticsService:
         normalized_key = experiment_key.strip()
         if not normalized_key:
             raise ValueError("Experiment key is required")
-        period = resolve_period(period_name)
+        as_of = source_as_of(self.database)
+        period = resolve_period(period_name, as_of)
         dataset_version = self.database.dataset_version()
         cache_key = self._cache_key(
             "experiment-analysis",
@@ -116,7 +118,7 @@ class ExperimentAnalyticsService:
         response = ExperimentAnalysisResponse(
             experiment=experiment,
             period=period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             variants=variants,
             comparisons=comparisons,
             methodology=ExperimentMethodology(
@@ -134,6 +136,8 @@ class ExperimentAnalyticsService:
             metadata=ProactiveMetadata(
                 generated_at=datetime.now(UTC),
                 execution_ms=(time.perf_counter() - started) * 1000,
+                source_id=getattr(self.database, "source_id", None),
+                tenant_id=getattr(self.database, "tenant_id", None),
             ),
         )
         self._cache_response(cache_key, dataset_version, response.model_dump(mode="json"))

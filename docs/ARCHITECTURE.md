@@ -55,12 +55,34 @@ Phase 43 stores a server-side snapshot of a validated `AnalysisResponse`. The cl
 ```text
 OIDC provider / trusted edge gateway → Bearer JWT → JWKS + issuer/audience/expiry validation
                                     → group-to-role mapping → tenant access context + RBAC
-                                    → canonical workspace session → operational history/notebook/quota state
+                                    → server-only source registry → read-only connector
+                                    → canonical workspace session → isolated analytics/cache/history/notebook state
 ```
 
-The first P3 slice remains an ingress and isolation boundary rather than a complete identity product. `X-ProductLens-Access` continues to carry a short-lived HMAC-signed `plx1` assertion for a trusted gateway. The API now also accepts a standard `Authorization: Bearer` OIDC JWT when `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`, and exact group mappings are configured. PyJWT validates an asymmetric algorithm against the deployment-configured JWKS; its cached JWKS client refreshes when a rotated key id appears, while issuer, audience, required subject, and expiry claims are verified before RBAC is applied. Group mappings use explicit admin/analyst/viewer sets with admin precedence and fail closed when a token has no mapped role.
+`X-ProductLens-Access` continues to carry a short-lived HMAC-signed `plx1` assertion for a trusted gateway. The API also accepts a standard `Authorization: Bearer` OIDC JWT when `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`, and exact group mappings are configured. PyJWT validates an asymmetric algorithm against the deployment-configured JWKS; its cached JWKS client refreshes when a rotated key id appears, while issuer, audience, required subject, and expiry claims are verified before RBAC is applied. Group mappings use explicit admin/analyst/viewer sets with admin precedence and fail closed when a token has no mapped role. Supabase Auth supplies the optional email/password session and top-level `workspace_id`/`groups` claims; it does not bypass backend verification.
 
-Signed operational sessions hash workspace/tenant, subject, and the browser session together, so two workspaces cannot share history or notebook state. The browser client keeps an optional short-lived assertion in session storage and automatically uses the bearer scheme for JWT-shaped tokens; token issuance, refresh, and provider login remain owned by the identity provider or trusted gateway. The current synthetic analytics views remain a shared demo dataset: the access context now carries a tenant boundary for the next connector slice, but dataset-level tenant isolation is not claimed until connector-backed source registration is enforced. Streaming ingestion, external connectors, enterprise SSO provisioning, multi-agent orchestration, and additional ML models remain deferred P3 work.
+Signed operational sessions hash workspace/tenant, subject, and the browser session together, so two workspaces cannot share history or notebook state. For authenticated requests, the verified workspace is resolved through `TENANT_SOURCE_CONFIG` and the corresponding server-only URL environment variable. The request-scoped `DatabaseService` binds all governed analytics, reports, experiments, advanced analytics, Copilot execution, dataset fingerprints, and result-cache namespaces to that source. Missing source configuration fails closed; no client-provided source, tenant override, SQL, or connector credential is accepted. Anonymous requests retain the synthetic demo binding.
+
+## P3 connector and streaming boundaries
+
+The first connector is a read-only PostgreSQL adapter. It checks the semantic analytics view contract, runs health and fingerprint probes inside read-only transactions with a statement timeout, and passes every analytical query through the existing SQLGlot validator before execution. The connector is intentionally deployment-configured rather than user-managed: `TENANT_SOURCE_CONFIG` maps verified workspace claims to a source ID and URL environment variable. `GET /api/v1/connectors/status` reports configuration, health, contract version, and read-only state without revealing credentials.
+
+```text
+verified tenant → fixed source binding → contract/health check
+                → SQL compiler → SQLGlot validator → read-only transaction
+                → tenant/source dataset fingerprint → isolated result cache
+```
+
+`GET /api/v1/stream/analytics` emits a bounded initial snapshot, fingerprint-triggered updates, heartbeats, event IDs, and a `Last-Event-ID` reconnect cursor. It requires the normal authorization header and the browser reconnects after the serverless duration limit; it is not a permanent subscription or streaming ingestion system.
+
+## P3 Copilot orchestration
+
+```text
+Planner (classify) → typed handoff → Analyst (governed operations)
+                                  → typed handoff → Evidence (bound findings/prose)
+```
+
+The orchestrator permits at most these three fixed stages and exposes only status, duration, capability labels, handoff count, and fallback metadata. The Analyst can use only existing governed analytics operations; no stage can create tools, issue arbitrary SQL, or access another tenant. Provider prose is optional and grounding-checked; timeout, provider failure, or budget exhaustion returns deterministic evidence.
 
 ## Boundaries
 

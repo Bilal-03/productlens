@@ -94,7 +94,7 @@ class OIDCValidator:
                 options={"require": ["exp", "iss", "aud", "sub"]},
                 leeway=0,
             )
-        except (InvalidTokenError, PyJWKClientError, TypeError, ValueError) as exc:
+        except (InvalidTokenError, PyJWKClientError, KeyError, TypeError, ValueError) as exc:
             raise OIDCValidationError("OIDC access token validation failed") from exc
 
         if not isinstance(payload, dict):

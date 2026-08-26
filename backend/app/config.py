@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class TenantSourceConfig(BaseModel):
+    kind: Literal["postgres"] = "postgres"
+    source_id: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    url_env: str = Field(min_length=2, max_length=128, pattern=r"^[A-Z][A-Z0-9_]*$")
 
 
 class Settings(BaseSettings):
@@ -32,6 +39,15 @@ class Settings(BaseSettings):
     oidc_role_groups: dict[str, list[str]] = Field(default_factory=dict)
     oidc_jwks_cache_ttl_seconds: int = Field(default=300, ge=30, le=86_400)
     oidc_jwks_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
+    tenant_source_config: dict[str, TenantSourceConfig] = Field(default_factory=dict)
+    # This optional local-development escape hatch keeps the source registry
+    # server-side while allowing a .env file to provide URL values. Vercel
+    # deployments should use url_env and separate secret environment values.
+    tenant_source_urls: dict[str, SecretStr] = Field(default_factory=dict)
+    sse_max_duration_seconds: int = Field(default=20, ge=1, le=55)
+    sse_poll_interval_seconds: int = Field(default=5, ge=1, le=15)
+    multi_agent_enabled: bool = True
+    multi_agent_timeout_ms: int = Field(default=10_000, ge=1_000, le=30_000)
     ai_requests_per_session_hour: int = Field(default=10, ge=1, le=1000)
     ai_requests_global_day: int = Field(default=100, ge=1, le=100_000)
     result_cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)

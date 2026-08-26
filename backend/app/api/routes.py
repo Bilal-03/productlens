@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+import time
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from functools import lru_cache
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from app.ai.insights import InsightService
 from app.ai.pipeline import CopilotPipeline
@@ -17,6 +20,11 @@ from app.analytics.experiments import ExperimentAnalyticsService
 from app.analytics.proactive import ProactiveAnalyticsService
 from app.analytics.service import AnalyticsService
 from app.config import Settings, get_settings
+from app.connectors.postgres import (
+    TenantDatabaseRouter,
+    TenantSourceRegistry,
+    TenantSourceUnavailable,
+)
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
     AccessContextResponse,
@@ -26,8 +34,10 @@ from app.models.contracts import (
     AnalyticsRequest,
     AnomaliesResponse,
     AuthMode,
+    ConnectorStatusResponse,
     CopilotRequest,
     CopilotResponse,
+    DateRange,
     ExperimentAnalysisResponse,
     ExperimentListResponse,
     FeatureAdoptionAnalyticsResponse,
@@ -41,6 +51,7 @@ from app.models.contracts import (
     RetentionAnalyticsResponse,
     RetentionRequest,
     SaveInsightRequest,
+    StreamMetricSnapshot,
     WeeklyReportResponse,
 )
 from app.notebook.service import NotebookService
@@ -112,33 +123,59 @@ def sql_validator() -> SQLValidator:
     return SQLValidator(SQLSafetyPolicy(max_rows=settings.max_query_rows))
 
 
-@lru_cache
-def analytics_service() -> AnalyticsService:
-    return AnalyticsService(database_service(), sql_validator())
+def tenant_source_registry(settings: Settings = Depends(get_settings)) -> TenantSourceRegistry:
+    return TenantSourceRegistry(settings)
 
 
-@lru_cache
-def copilot_pipeline() -> CopilotPipeline:
-    settings = get_settings()
-    provider_router = ProviderRouter(settings)
+def tenant_database_service(
+    context: AccessContext = Depends(access_context),
+    base_database: DatabaseService = Depends(database_service),
+    settings: Settings = Depends(get_settings),
+) -> DatabaseService:
+    try:
+        return TenantDatabaseRouter(settings, base_database).database_for(context)
+    except TenantSourceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def analytics_service(
+    database: DatabaseService = Depends(tenant_database_service),
+    validator: SQLValidator = Depends(sql_validator),
+) -> AnalyticsService:
+    return AnalyticsService(database, validator)
+
+
+def copilot_pipeline(
+    database: DatabaseService = Depends(tenant_database_service),
+    analytics: AnalyticsService = Depends(analytics_service),
+    validator: SQLValidator = Depends(sql_validator),
+    settings: Settings = Depends(get_settings),
+) -> CopilotPipeline:
+    provider_router = ProviderRouter(
+        settings,
+        timeout_seconds=settings.multi_agent_timeout_ms / 1000,
+        max_attempts=1,
+    )
     return CopilotPipeline(
         settings=settings,
-        database=database_service(),
-        analytics=analytics_service(),
+        database=database,
+        analytics=analytics,
         planner=QuestionPlanner(),
-        validator=sql_validator(),
+        validator=validator,
         insights=InsightService(provider_router),
-        sql_generator=SQLGenerator(provider_router, sql_validator()),
+        sql_generator=SQLGenerator(provider_router, validator),
     )
 
 
-@lru_cache
-def proactive_service() -> ProactiveAnalyticsService:
-    settings = get_settings()
+def proactive_service(
+    database: DatabaseService = Depends(tenant_database_service),
+    settings: Settings = Depends(get_settings),
+    validator: SQLValidator = Depends(sql_validator),
+) -> ProactiveAnalyticsService:
     report_provider_timeout = settings.report_provider_timeout_ms / 1000 if settings.report_provider_timeout_ms > 0 else None
     return ProactiveAnalyticsService(
-        database_service(),
-        sql_validator(),
+        database,
+        validator,
         InsightService(
             ProviderRouter(
                 settings,
@@ -151,23 +188,32 @@ def proactive_service() -> ProactiveAnalyticsService:
     )
 
 
-@lru_cache
-def experiment_service() -> ExperimentAnalyticsService:
-    return ExperimentAnalyticsService(database_service(), sql_validator())
+def experiment_service(
+    database: DatabaseService = Depends(tenant_database_service),
+    validator: SQLValidator = Depends(sql_validator),
+) -> ExperimentAnalyticsService:
+    return ExperimentAnalyticsService(database, validator)
 
 
-@lru_cache
-def advanced_service() -> AdvancedAnalyticsService:
-    return AdvancedAnalyticsService(database_service(), sql_validator())
+def advanced_service(
+    database: DatabaseService = Depends(tenant_database_service),
+    validator: SQLValidator = Depends(sql_validator),
+) -> AdvancedAnalyticsService:
+    return AdvancedAnalyticsService(database, validator)
 
 
-@lru_cache
-def notebook_service() -> NotebookService:
-    return NotebookService(database_service())
+def notebook_service(
+    database: DatabaseService = Depends(tenant_database_service),
+) -> NotebookService:
+    return NotebookService(database)
 
 
 @router.get("/access/context", response_model=AccessContextResponse)
-def access_context_info(context: AccessContext = Depends(access_context)) -> AccessContextResponse:
+def access_context_info(
+    context: AccessContext = Depends(access_context),
+    settings: Settings = Depends(get_settings),
+) -> AccessContextResponse:
+    source = TenantSourceRegistry(settings).configured_status(context)
     return AccessContextResponse(
         workspace_id=context.workspace_id,
         tenant_id=context.tenant_id,
@@ -176,6 +222,8 @@ def access_context_info(context: AccessContext = Depends(access_context)) -> Acc
         auth_mode=context.auth_mode,
         permissions=sorted(context.permissions),
         session_scoped=context.session_hash is not None,
+        source_id=source.source_id,
+        source_configured=source.configured,
     )
 
 
@@ -187,7 +235,7 @@ def health(database: DatabaseService = Depends(database_service)) -> dict[str, o
 @router.get("/metadata/dataset")
 def dataset_metadata(
     context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
-    database: DatabaseService = Depends(database_service),
+    database: DatabaseService = Depends(tenant_database_service),
 ) -> dict[str, object]:
     try:
         return database.dataset_metadata()
@@ -198,7 +246,7 @@ def dataset_metadata(
 @router.get("/catalog")
 def catalog(
     context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
-    database: DatabaseService = Depends(database_service),
+    database: DatabaseService = Depends(tenant_database_service),
 ) -> dict[str, object]:
     try:
         metadata = database.dataset_metadata()
@@ -207,6 +255,20 @@ def catalog(
     except DatabaseUnavailable:
         counts = None
     return registry.public_catalog_with_counts(counts)
+
+
+@router.get("/connectors/status", response_model=ConnectorStatusResponse)
+def connector_status(
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    settings: Settings = Depends(get_settings),
+    base_database: DatabaseService = Depends(database_service),
+) -> ConnectorStatusResponse:
+    registry_service = TenantSourceRegistry(settings)
+    try:
+        source = TenantDatabaseRouter(settings, base_database).status_for(context)
+    except TenantSourceUnavailable:
+        source = registry_service.configured_status(context)
+    return ConnectorStatusResponse(source=source)
 
 
 @router.post("/analytics/kpi")
@@ -372,6 +434,114 @@ def weekly_report(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+def _stream_event(event: str, payload: StreamMetricSnapshot) -> str:
+    return (
+        f"id: {payload.event_id}\n"
+        f"event: {event}\n"
+        f"data: {json.dumps(payload.model_dump(mode='json'), separators=(',', ':'))}\n\n"
+    )
+
+
+@router.get("/stream/analytics")
+def analytics_stream(
+    metric: str = Query(default="mau", min_length=2, max_length=64),
+    period: str = Query(default="last_30_days"),
+    max_events: int = Query(default=3, ge=1, le=5),
+    poll_seconds: int | None = Query(default=None, ge=1, le=15),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID", max_length=32),
+    context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
+    service: AnalyticsService = Depends(analytics_service),
+    database: DatabaseService = Depends(tenant_database_service),
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    if metric not in registry.metrics:
+        raise HTTPException(status_code=422, detail=f"Unsupported metric: {metric}")
+    if period not in {"last_30_days", "last_90_days"}:
+        raise HTTPException(status_code=422, detail="Streaming supports last_30_days or last_90_days")
+    try:
+        starting_id = max(0, int(last_event_id or "0"))
+    except ValueError:
+        starting_id = 0
+    interval = poll_seconds or settings.sse_poll_interval_seconds
+    max_duration = settings.sse_max_duration_seconds
+
+    def snapshot_for(version: str, event_id: int, snapshot_type: str) -> StreamMetricSnapshot:
+        result = service.metric(AnalyticsRequest(metric=metric, period=period))
+        metric_definition = result.get("metric") if isinstance(result, dict) else {}
+        if not isinstance(metric_definition, dict):
+            metric_definition = {}
+        rows = result.get("current") if isinstance(result, dict) else []
+        row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+        raw_value = row.get("value")
+        period_value = result.get("current_period") if isinstance(result, dict) else None
+        period_contract = DateRange.model_validate(period_value) if isinstance(period_value, dict) else None
+        value = float(raw_value) if raw_value is not None else None
+        return StreamMetricSnapshot(
+            type=snapshot_type,
+            event_id=event_id,
+            generated_at=datetime.now(UTC),
+            dataset_version=version,
+            source_id=database.source_id,
+            tenant_id=context.tenant_id,
+            metric=metric,
+            metric_label=str(metric_definition.get("label") or metric),
+            period=period_contract,
+            value=value,
+            formatted=_format_stream_value(value, registry.metric(metric).format) if value is not None else None,
+        )
+
+    initial_version = database.dataset_version() or "unavailable"
+    try:
+        initial_snapshot = snapshot_for(initial_version, max(1, starting_id + 1), "snapshot")
+    except (DatabaseUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="The analytics update stream is unavailable") from exc
+
+    def stream() -> Iterator[str]:
+        started = time.monotonic()
+        event_id = initial_snapshot.event_id
+        emitted_updates = 1
+        previous_version: str | None = initial_version
+        latest: StreamMetricSnapshot | None = initial_snapshot
+        yield _stream_event("snapshot", initial_snapshot)
+        while emitted_updates < max_events and time.monotonic() - started < max_duration:
+            version = database.dataset_version() or "unavailable"
+            if version != previous_version:
+                try:
+                    event_id += 1
+                    latest = snapshot_for(version, event_id, "update")
+                    previous_version = version
+                    emitted_updates += 1
+                    yield _stream_event(latest.type, latest)
+                except (DatabaseUnavailable, ValueError):
+                    break
+            elif latest is not None:
+                event_id += 1
+                heartbeat = latest.model_copy(update={"type": "heartbeat", "event_id": event_id})
+                yield _stream_event("heartbeat", heartbeat)
+            remaining = max_duration - (time.monotonic() - started)
+            if remaining <= 0:
+                break
+            time.sleep(min(interval, remaining))
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _format_stream_value(value: float, format_name: str) -> str:
+    if format_name == "currency":
+        return f"${value:,.0f}"
+    if format_name == "percentage":
+        return f"{value * 100:.1f}%"
+    return f"{value:,.0f}"
+
+
 @router.get("/experiments", response_model=ExperimentListResponse)
 def experiments(
     context: AccessContext = Depends(require_permission(Permission.ANALYTICS_READ)),
@@ -420,7 +590,7 @@ def copilot_analyze(
     pipeline: CopilotPipeline = Depends(copilot_pipeline),
     context: AccessContext = Depends(require_permission(Permission.ANALYZE)),
 ) -> CopilotResponse:
-    if context.auth_mode is AuthMode.SIGNED:
+    if context.auth_mode is not AuthMode.ANONYMOUS:
         request = request.model_copy(update={"session_id": context.canonical_session_id(request.session_id)})
     return pipeline.analyze(request)
 
@@ -431,7 +601,7 @@ def history(
     limit: int = Query(default=30, ge=1, le=100),
     settings: Settings = Depends(get_settings),
     context: AccessContext = Depends(require_permission(Permission.HISTORY_READ)),
-    database: DatabaseService = Depends(database_service),
+    database: DatabaseService = Depends(tenant_database_service),
 ) -> list[dict[str, object]]:
     session_hash = session_hash_for(context, x_productlens_session, settings)
     try:
@@ -446,7 +616,7 @@ def history_item(
     x_productlens_session: str = Header(min_length=20, max_length=128),
     settings: Settings = Depends(get_settings),
     context: AccessContext = Depends(require_permission(Permission.HISTORY_READ)),
-    database: DatabaseService = Depends(database_service),
+    database: DatabaseService = Depends(tenant_database_service),
 ) -> dict[str, object]:
     session_hash = session_hash_for(context, x_productlens_session, settings)
     try:

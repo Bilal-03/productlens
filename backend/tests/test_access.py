@@ -218,6 +218,22 @@ def test_oidc_validator_checks_claims_and_maps_groups_to_roles() -> None:
         validator.validate(oidc_token(aud="another-api"))
     with pytest.raises(OIDCValidationError, match="validation failed"):
         validator.validate(oidc_token(exp=int(datetime.now(UTC).timestamp()) - 1))
+    with pytest.raises(OIDCValidationError, match="validation failed"):
+        validator.validate(oidc_token() + "tampered")
+    unknown_kid_payload = jwt.decode(oidc_token(), options={"verify_signature": False})
+    unknown_kid = jwt.encode(unknown_kid_payload, OIDC_PRIVATE_KEYS["key-1"], algorithm="RS256", headers={"kid": "unknown"})
+    with pytest.raises(OIDCValidationError, match="validation failed"):
+        validator.validate(unknown_kid)
+    missing_workspace_payload = dict(unknown_kid_payload)
+    missing_workspace_payload.pop("workspace_id")
+    missing_workspace = jwt.encode(missing_workspace_payload, OIDC_PRIVATE_KEYS["key-1"], algorithm="RS256", headers={"kid": "key-1"})
+    with pytest.raises(OIDCValidationError, match="workspace"):
+        validator.validate(missing_workspace)
+    missing_groups_payload = dict(unknown_kid_payload)
+    missing_groups_payload.pop("groups")
+    missing_groups = jwt.encode(missing_groups_payload, OIDC_PRIVATE_KEYS["key-1"], algorithm="RS256", headers={"kid": "key-1"})
+    with pytest.raises(OIDCValidationError, match="groups"):
+        validator.validate(missing_groups)
     with pytest.raises(OIDCValidationError, match="do not map"):
         validator.validate(oidc_token(groups=["unmapped-group"]))
 

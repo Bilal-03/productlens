@@ -13,7 +13,7 @@ from app.analytics.sql_compiler import (
     compile_revenue_cohorts,
     compile_stickiness,
 )
-from app.analytics.time_ranges import DATASET_AS_OF, resolve_period
+from app.analytics.time_ranges import resolve_period, source_as_of
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
     AdvancedAnalyticsResponse,
@@ -42,7 +42,8 @@ class AdvancedAnalyticsService:
     def report(self, period_name: str = "last_90_days") -> AdvancedAnalyticsResponse:
         if period_name not in {"last_30_days", "last_90_days"}:
             raise ValueError("Advanced analytics supports last_30_days or last_90_days")
-        period = resolve_period(period_name)
+        as_of = source_as_of(self.database)
+        period = resolve_period(period_name, as_of)
         dataset_version = self.database.dataset_version()
         cache_key = self._cache_key(self.CACHE_VERSION, {"period": period_name})
         if dataset_version:
@@ -87,7 +88,7 @@ class AdvancedAnalyticsService:
         metrics = sorted({metric for _, _, _, used_metrics in results.values() for metric in used_metrics})
         response = AdvancedAnalyticsResponse(
             period=period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             churn_risk=risk_rows,
             journeys=journey_rows,
             stickiness=stickiness_rows,
@@ -111,6 +112,8 @@ class AdvancedAnalyticsService:
             metadata=ProactiveMetadata(
                 generated_at=datetime.now(UTC),
                 execution_ms=(time.perf_counter() - started) * 1000,
+                source_id=getattr(self.database, "source_id", None),
+                tenant_id=getattr(self.database, "tenant_id", None),
             ),
         )
         self._cache_response(cache_key, dataset_version, response.model_dump(mode="json"))

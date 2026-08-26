@@ -1,4 +1,4 @@
-import type { AccessContextResponse, AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AccessContextResponse, AdvancedAnalyticsResponse, ConnectorStatusResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 const ACCESS_TOKEN_KEY = "productlens-access-token";
@@ -48,6 +48,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getAccessContext() {
   return api<AccessContextResponse>("/access/context");
+}
+
+export function getConnectorStatus() {
+  return api<ConnectorStatusResponse>("/connectors/status");
 }
 
 export function analyze(question: string, mode: "quick" | "deep", selected_metric?: string) {

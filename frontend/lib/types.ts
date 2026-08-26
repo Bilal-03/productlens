@@ -10,8 +10,11 @@ export type AnalysisResponse = {
   chart: ChartSpec; findings: Finding[]; drivers: Driver[]; evidence: Evidence[];
   recommendations: { priority: string; action: string; expected_impact: string; evidence_ids: string[]; how_to_validate: string }[];
   follow_up_questions: string[]; investigation_trace: string[]; sql: { query: string; purpose: string; tables: string[]; metrics: string[]; validated: boolean; row_count: number };
-  caveats: string[]; metadata: { query_id: string; generated_at: string; dataset_as_of: string; provider: string; confidence: "high" | "medium" | "low"; model?: string | null; input_tokens?: number | null; output_tokens?: number | null; timings: { total_ms: number; planner_ms: number; execution_ms: number; analysis_ms: number; interpretation_ms: number } };
+  caveats: string[]; metadata: { query_id: string; generated_at: string; dataset_as_of: string; provider: string; confidence: "high" | "medium" | "low"; model?: string | null; input_tokens?: number | null; output_tokens?: number | null; timings: { total_ms: number; planner_ms: number; execution_ms: number; analysis_ms: number; interpretation_ms: number }; orchestration?: OrchestrationMetadata | null };
 };
+
+export type AgentStatus = { name: "planner" | "analyst" | "evidence"; status: "completed" | "fallback" | "skipped" | "failed"; duration_ms: number };
+export type OrchestrationMetadata = { enabled: boolean; mode: "bounded_pipeline" | "single_pipeline"; agents: AgentStatus[]; handoffs: number; fallback: boolean; bounded: boolean };
 
 export type NotebookInsight = {
   insight_id: string;
@@ -85,6 +88,8 @@ export type AccessContextResponse = {
   auth_mode: "anonymous" | "signed" | "oidc";
   permissions: string[];
   session_scoped: boolean;
+  source_id?: string | null;
+  source_configured?: boolean;
 };
 
 export type ClarificationResponse = { type: "clarification"; question: string; reason: string; options: { metric: string; label: string; definition: string }[] };
@@ -281,6 +286,9 @@ export type ProductPulseResponse = {
   evidence: Evidence[]; methodology: AnomalyMethodology; sql: ProactiveSQLTransparency;
   warnings: string[]; metadata: ProactiveMetadata;
 };
+export type ConnectorSourceStatus = { source_id: string; tenant_id: string; kind: "postgres"; configured: boolean; healthy: boolean; read_only: boolean; contract_version: string; detail: string };
+export type ConnectorStatusResponse = { type: "connector_status"; source: ConnectorSourceStatus };
+export type StreamMetricSnapshot = { type: "snapshot" | "update" | "heartbeat"; event_id: number; generated_at: string; dataset_version: string; source_id: string; tenant_id: string; metric: string; metric_label: string; period: DateRange | null; value: number | null; formatted: string | null };
 export type ReportMetric = {
   metric: string; label: string; format: "integer" | "percentage" | "currency";
   current: ProactiveMetricPoint | null; previous: ProactiveMetricPoint | null;

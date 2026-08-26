@@ -1,10 +1,30 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from app.models.contracts import DateRange
 
 DATASET_AS_OF = date(2026, 8, 24)
+
+
+def source_as_of(source: Any) -> date:
+    """Resolve a source's latest usable date, preserving the demo contract.
+
+    The synthetic demo has a fixed reference date so its relative periods stay
+    reproducible. A tenant connector may expose a different data horizon; its
+    optional ``dataset_as_of`` method is used when available. Test doubles and
+    legacy callers safely retain the demo date.
+    """
+
+    resolver = getattr(source, "dataset_as_of", None)
+    if callable(resolver):
+        value = resolver()
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+    return DATASET_AS_OF
 
 
 def resolve_period(name: str, as_of: date = DATASET_AS_OF) -> DateRange:

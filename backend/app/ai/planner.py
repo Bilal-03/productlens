@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
-from app.analytics.time_ranges import default_comparison, resolve_period
+from app.analytics.time_ranges import DATASET_AS_OF, default_comparison, resolve_period
 from app.models.contracts import AnalyticsPlan, ClarificationOption, Filter, Intent
 from app.semantic.registry import registry
 
@@ -32,7 +33,13 @@ class UnsafeQuestion(ValueError):
 
 
 class QuestionPlanner:
-    def plan(self, question: str, selected_metric: str | None = None) -> AnalyticsPlan | AmbiguousQuestion | AdHocQuestion:
+    def plan(
+        self,
+        question: str,
+        selected_metric: str | None = None,
+        *,
+        as_of: date = DATASET_AS_OF,
+    ) -> AnalyticsPlan | AmbiguousQuestion | AdHocQuestion:
         normalized = re.sub(r"[!?.,]+$", "", " ".join(question.lower().split()))
         if UNSAFE_LANGUAGE.search(normalized):
             raise UnsafeQuestion("The request contains an unsupported database operation")
@@ -79,18 +86,18 @@ class QuestionPlanner:
         if intent == Intent.COHORT and not dimensions:
             dimensions = ["cohort"]
         dimensions = [item for item in dimensions if item in registry.metric(metric).valid_dimensions]
-        comparison = default_comparison(period_name) if intent in {Intent.COMPARISON, Intent.DIAGNOSTIC, Intent.TREND} else None
+        comparison = default_comparison(period_name, as_of) if intent in {Intent.COMPARISON, Intent.DIAGNOSTIC, Intent.TREND} else None
         return AnalyticsPlan(
             intent=intent,
             metric=metric,
-            time_range=resolve_period(period_name),
+            time_range=resolve_period(period_name, as_of),
             comparison=comparison,
             dimensions=dimensions,
             requires_segmentation=bool(dimensions),
             requires_comparison=comparison is not None,
             filters=filters,
             assumptions=[
-                "Relative dates use the synthetic dataset reference date",
+                f"Relative dates use the source data horizon ending {as_of.isoformat()}",
                 "All dates are UTC",
                 *(["Explicit segment filters are applied before metric calculation"] if filters else []),
             ],

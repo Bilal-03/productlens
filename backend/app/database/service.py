@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.pool import NullPool
 
+from app.analytics.time_ranges import DATASET_AS_OF
 from app.config import Settings
 from app.models.contracts import SQLValidation
 
@@ -18,17 +20,50 @@ class DatabaseUnavailable(RuntimeError):
 
 
 class DatabaseService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        analytics_database_url: str | None = None,
+        source_id: str = "demo",
+        tenant_id: str = "anonymous-demo",
+        app_engine: Engine | None = None,
+    ) -> None:
         self.settings = settings
+        self.source_id = source_id
+        self.tenant_id = tenant_id
         # Supabase transaction poolers do not support server-side prepared
         # statements. Disabling preparation is safe for direct/session URLs
         # too and keeps the same runtime configuration portable to Vercel.
         kwargs: dict[str, Any] = {"pool_pre_ping": True, "connect_args": {"prepare_threshold": None}}
         if settings.environment == "production":
             kwargs["poolclass"] = NullPool
-        self.app_engine: Engine = create_engine(settings.app_database_url, **kwargs)
-        self.analytics_engine: Engine = create_engine(settings.analytics_database_url, **kwargs)
+        self.app_engine: Engine = app_engine or create_engine(
+            self._normalize_postgres_url(settings.app_database_url), **kwargs
+        )
+        self.analytics_engine: Engine = create_engine(
+            self._normalize_postgres_url(analytics_database_url or settings.analytics_database_url),
+            **kwargs,
+        )
         self.timeout_ms = settings.query_timeout_ms
+        self._resolved_dataset_as_of: date | None = None
+
+    def with_analytics_source(
+        self,
+        analytics_database_url: str,
+        *,
+        source_id: str,
+        tenant_id: str = "anonymous-demo",
+    ) -> DatabaseService:
+        """Create a source-bound service while sharing the operational engine."""
+
+        return DatabaseService(
+            self.settings,
+            analytics_database_url=analytics_database_url,
+            source_id=source_id,
+            tenant_id=tenant_id,
+            app_engine=self.app_engine,
+        )
 
     def health(self) -> bool:
         try:
@@ -38,7 +73,16 @@ class DatabaseService:
         except Exception:
             return False
 
+    def analytics_health(self) -> bool:
+        try:
+            self._execute_fixed_readonly("SELECT 1")
+            return True
+        except Exception:
+            return False
+
     def dataset_metadata(self) -> dict[str, Any]:
+        if not self._is_demo_source():
+            return self._external_dataset_metadata()
         query = text(
             "SELECT dataset_version, dataset_as_of, seed, profile, generated_at, row_counts "
             "FROM operational.dataset_metadata ORDER BY generated_at DESC LIMIT 1"
@@ -55,6 +99,25 @@ class DatabaseService:
             raise DatabaseUnavailable("The analytics database is unavailable") from exc
 
     def dataset_version(self) -> str | None:
+        if not self._is_demo_source():
+            try:
+                rows = self._execute_fixed_readonly(
+                    """SELECT md5(concat_ws('|',
+                       (SELECT count(*)::text FROM analytics.users),
+                       (SELECT count(*)::text FROM analytics.sessions),
+                       (SELECT count(*)::text FROM analytics.events),
+                       (SELECT count(*)::text FROM analytics.subscriptions),
+                       (SELECT count(*)::text FROM analytics.transactions),
+                       (SELECT count(*)::text FROM analytics.daily_activity),
+                       (SELECT count(*)::text FROM analytics.experiments),
+                       (SELECT count(*)::text FROM analytics.experiment_assignments),
+                       COALESCE((SELECT max(event_timestamp)::text FROM analytics.events), '')
+                    )) AS dataset_version"""
+                )
+                value = rows[0].get("dataset_version") if rows else None
+                return f"{self.source_id}:{value}" if value is not None else None
+            except Exception:
+                return None
         try:
             with self.app_engine.connect() as connection:
                 value = connection.execute(
@@ -64,6 +127,33 @@ class DatabaseService:
         except Exception:
             return None
 
+    def dataset_as_of(self) -> date:
+        """Return the latest source date used for relative periods."""
+
+        if self._is_demo_source():
+            return DATASET_AS_OF
+        if self._resolved_dataset_as_of is not None:
+            return self._resolved_dataset_as_of
+        try:
+            rows = self._execute_fixed_readonly(
+                """SELECT GREATEST(
+                    COALESCE((SELECT max(event_timestamp)::date FROM analytics.events), DATE '1970-01-01'),
+                    COALESCE((SELECT max(signup_at)::date FROM analytics.users), DATE '1970-01-01'),
+                    COALESCE((SELECT max(\"timestamp\")::date FROM analytics.transactions), DATE '1970-01-01')
+                ) AS dataset_as_of"""
+            )
+            value = rows[0].get("dataset_as_of") if rows else None
+            if isinstance(value, datetime):
+                value = value.date()
+            if not isinstance(value, date) or value == date(1970, 1, 1):
+                raise DatabaseUnavailable("The external analytics source has no usable data horizon")
+            self._resolved_dataset_as_of = value
+            return value
+        except DatabaseUnavailable:
+            raise
+        except Exception as exc:
+            raise DatabaseUnavailable("The external analytics source is unavailable") from exc
+
     def cache_get(self, cache_key: str, dataset_version: str) -> dict[str, Any] | None:
         statement = text(
             """SELECT payload FROM operational.result_cache
@@ -72,7 +162,8 @@ class DatabaseService:
         try:
             with self.app_engine.connect() as connection:
                 value = connection.execute(
-                    statement, {"cache_key": cache_key, "dataset_version": dataset_version}
+                    statement,
+                    {"cache_key": self._cache_namespace(cache_key), "dataset_version": dataset_version},
                 ).scalar_one_or_none()
             return dict(value) if isinstance(value, dict) else None
         except Exception:
@@ -92,7 +183,7 @@ class DatabaseService:
                 connection.execute(
                     statement,
                     {
-                        "cache_key": cache_key,
+                        "cache_key": self._cache_namespace(cache_key),
                         "dataset_version": dataset_version,
                         "payload": json.dumps(payload, default=str),
                         "ttl_seconds": ttl_seconds,
@@ -100,6 +191,81 @@ class DatabaseService:
                 )
         except Exception:
             pass
+
+    def _cache_namespace(self, cache_key: str) -> str:
+        if self._is_demo_source():
+            return cache_key
+        # result_cache.cache_key is a fixed 64-character hash. Namespace at
+        # the database boundary so a shared operational store cannot return a
+        # response calculated from another tenant's source.
+        return hashlib.sha256(
+            f"{self.tenant_id}:{self.source_id}:{cache_key}".encode()
+        ).hexdigest()
+
+    def _is_demo_source(self) -> bool:
+        """Keep the public demo namespace distinct from every tenant source."""
+
+        return self.tenant_id == "anonymous-demo" and self.source_id == "demo"
+
+    def _external_dataset_metadata(self) -> dict[str, Any]:
+        query = text(
+            """SELECT
+              (SELECT count(*) FROM analytics.users)::int AS users,
+              (SELECT count(*) FROM analytics.sessions)::int AS sessions,
+              (SELECT count(*) FROM analytics.events)::int AS events,
+              (SELECT count(*) FROM analytics.subscriptions)::int AS subscriptions,
+              (SELECT count(*) FROM analytics.transactions)::int AS transactions,
+              COALESCE((SELECT max(event_timestamp)::date FROM analytics.events), CURRENT_DATE) AS dataset_as_of
+            """
+        )
+        try:
+            rows = self._execute_fixed_readonly(query.text)
+            if not rows:
+                raise DatabaseUnavailable("The external analytics source returned no metadata")
+            row = rows[0]
+            source_as_of = row.get("dataset_as_of")
+            if isinstance(source_as_of, datetime):
+                source_as_of = source_as_of.date()
+            if isinstance(source_as_of, date):
+                self._resolved_dataset_as_of = source_as_of
+            version = self.dataset_version()
+            if version is None:
+                raise DatabaseUnavailable("The external analytics source has no dataset fingerprint")
+            return {
+                "dataset_version": version,
+                "dataset_as_of": row["dataset_as_of"],
+                "seed": 0,
+                "profile": "external-postgres",
+                "generated_at": datetime.now(UTC),
+                "row_counts": {key: int(row[key]) for key in ("users", "sessions", "events", "subscriptions", "transactions")},
+                "scenario_parameters": {},
+            }
+        except DatabaseUnavailable:
+            raise
+        except Exception as exc:
+            raise DatabaseUnavailable("The external analytics source is unavailable") from exc
+
+    def _execute_fixed_readonly(self, statement: str) -> list[dict[str, Any]]:
+        """Run a server-owned probe in a read-only, timeout-bounded transaction."""
+
+        with self.analytics_engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                connection.execute(text(f"SET LOCAL statement_timeout = {int(self.timeout_ms)}"))
+                result = connection.execute(text(statement))
+                return [dict(row) for row in result.mappings().all()]
+            finally:
+                transaction.rollback()
+
+    @staticmethod
+    def _normalize_postgres_url(url: str) -> str:
+        normalized = url.strip()
+        if normalized.startswith("postgresql://"):
+            return "postgresql+psycopg://" + normalized.removeprefix("postgresql://")
+        if normalized.startswith("postgres://"):
+            return "postgresql+psycopg://" + normalized.removeprefix("postgres://")
+        return normalized
 
     def execute_readonly(self, validation: SQLValidation) -> tuple[list[dict[str, Any]], float]:
         if not validation.valid or not validation.normalized_query:

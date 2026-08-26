@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { ArrowRight, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { getProductPulse } from "@/lib/api";
 import type { AnomalyRecord, Evidence, ProductPulseResponse } from "@/lib/types";
 import { Badge, Button, Card } from "@/components/ui";
 import { PageHeading } from "@/components/page-heading";
+import { useAnalyticsStream } from "@/lib/use-analytics-stream";
 
 type PulsePeriod = "last_30_days" | "last_90_days";
 
@@ -62,8 +63,12 @@ function PulseResults({ result }: { result: ProductPulseResponse }) {
 export function ProductPulse() {
   const [period, setPeriod] = useState<PulsePeriod>("last_30_days");
   const query = useQuery({ queryKey: ["product-pulse", period], queryFn: () => getProductPulse(period), staleTime: 300_000 });
+  const { refetch } = query;
+  const handleStreamUpdate = useCallback(() => void refetch(), [refetch]);
+  const live = useAnalyticsStream({ metric: "mau", period, enabled: query.data !== undefined, onUpdate: handleStreamUpdate });
   return <>
     <PageHeading eyebrow="Proactive analytics" title="Product Pulse" description="A governed feed of unusual movement across growth, activation, engagement, checkout, revenue, and churn." action={<div className="flex flex-wrap items-center gap-2"><label className="sr-only" htmlFor="pulse-period">Pulse period</label><select id="pulse-period" value={period} onChange={(event) => setPeriod(event.target.value as PulsePeriod)} className="h-10 rounded-lg border border-[#e1e5ec] bg-white px-3 text-sm font-semibold text-[#596071]"><option value="last_30_days">Last 30 days</option><option value="last_90_days">Last 90 days</option></select><Button variant="secondary" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={15} className={query.isFetching ? "animate-spin" : ""} /> Refresh</Button><Button asChild variant="secondary"><Link href="/reports/weekly">Weekly report <ArrowRight size={15} /></Link></Button></div>} />
+    <Card className="mb-5 flex flex-wrap items-center justify-between gap-2 p-3 text-xs text-[#697080]"><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${live.status === "live" ? "bg-[#21a273]" : live.status === "connecting" ? "bg-[#d28124]" : "bg-[#a1a7b3]"}`} /> Live analytics updates: {live.status}</span>{live.lastEvent?.formatted && <span>Latest {live.lastEvent.metric_label}: {live.lastEvent.formatted}</span>}</Card>
     {query.isLoading && <div className="grid gap-5 lg:grid-cols-2"><div className="skeleton h-[450px]"/><div className="skeleton h-[450px]"/><div className="skeleton h-[450px]"/><div className="skeleton h-[450px]"/></div>}
     {query.isError && <Card className="border-[#ffd8dc] bg-[#fffafb] p-6"><Badge tone="warning">Pulse unavailable</Badge><h2 className="mt-3 text-lg font-bold">Signals could not be loaded</h2><p className="mt-2 text-sm text-[#707786]">{query.error.message}</p><Button className="mt-5" variant="secondary" onClick={() => void query.refetch()}>Try again</Button></Card>}
     {query.data && <PulseResults result={query.data} />}

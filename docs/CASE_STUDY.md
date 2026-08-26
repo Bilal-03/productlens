@@ -47,4 +47,4 @@ The production rollout was completed on 2026-08-26: migration `0002_p0p1_complet
 
 ## Limitations
 
-The data is synthetic and observational. The application does not establish causality, does not provide authentication or cross-device history, and is not positioned as an enterprise-scale production system. Live provider scoring is intentionally not claimed without a timestamped evaluation artifact. The screenshots above are captured from the current production URLs; the deterministic fallback is shown when provider quota or availability requires it.
+The data is synthetic and observational. The application does not establish causality, and session-scoped history is not presented as cross-device collaboration. The optional P3 Supabase/OIDC path adds verified workspace access and tenant-source routing, while the public demo remains anonymous; this is not positioned as an enterprise-scale production system. Live provider scoring is intentionally not claimed without a timestamped evaluation artifact. The screenshots above are captured from the current production URLs; the deterministic fallback is shown when provider quota or availability requires it.

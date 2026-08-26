@@ -2,7 +2,7 @@
 
 ProductLens AI is an AI-assisted product analytics workspace that turns natural-language business questions into validated analytical investigations. It combines a governed semantic metrics layer, AST-validated read-only SQL, deterministic product analytics, controlled visualizations, and evidence-backed recommendations.
 
-> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. Phase 39 experiment analytics and Phase 40 descriptive advanced analytics are live through the default 90-day surface. Phase 43 saved-analysis notebook and deterministic executive-summary work are live and smoke-tested. The P3 access boundary now supports provider-neutral `plx1` assertions plus configured OIDC/JWKS bearer validation and group-to-role mapping; tenant-aware source isolation, connectors, streaming, and multi-agent orchestration remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
+> Current status: P0/P1 parity, P2 proactive analytics, Phases 39–40, and Phase 43 are implemented. The bounded P3 milestone is now implemented end to end: optional Supabase Auth/OIDC with verified JWKS bearer tokens, group-to-role mapping, server-side tenant source routing, a read-only PostgreSQL connector, reconnectable SSE updates, and a typed three-stage Copilot orchestration. The anonymous demo remains available. Protected tenant workspaces still require the deployment environment and identity-provider claims described in [Deployment](docs/DEPLOYMENT.md), followed by the integration/live smoke checklist. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
 
 ## Why it exists
 
@@ -23,6 +23,11 @@ It is deliberately not a generic chatbot or unrestricted text-to-SQL wrapper.
 - Query transparency, anonymous-session history, audit logs, and confidence/caveats
 - Provider-neutral signed workspace access context with viewer/analyst/admin permissions
 - Configured OIDC/JWKS bearer validation with issuer, audience, expiry, key-rotation, and group-role checks
+- Optional Supabase Auth email/password sign-in, refresh, logout, and anonymous fallback
+- Server-side workspace-to-source routing with tenant-isolated history, cache, reports, and Copilot execution
+- Read-only PostgreSQL connector with governed view/column contract, health checks, timeouts, and dataset fingerprints
+- Bounded SSE analytics snapshots with heartbeats, event IDs, fingerprint updates, and automatic browser reconnects
+- Typed Planner → Analyst → Evidence Copilot orchestration with fixed capabilities and deterministic fallback
 - Explainable anomaly detection, Product Pulse, deterministic weekly reports, and Markdown export
 - Governed experiment comparisons plus deterministic churn-risk, journey, stickiness, power-user, and observed revenue-cohort analytics (Phase 39–40 first slice)
 - Session-scoped Analysis Notebook for pinning, reopening, and summarizing validated investigations (Phase 43)
@@ -42,7 +47,7 @@ Prerequisites: Docker, Node 22.x, npm 10+, and Python 3.12+.
 
 The dataset is synthetic and anchored to 2026-08-24 so relative-period demo questions remain reproducible.
 
-Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. Phase 39–40 gates additionally cover experiment assignment semantics, uplift/significance guards, advanced query allowlists, UTC daily-activity rollup semantics, cache invalidation, partial-result contracts, API/UI surfaces, and opt-in PostgreSQL execution. Phase 43 gates cover session scoping, idempotent notebook persistence, evidence-bound deterministic summary aggregation, saved-analysis projection, and responsive route/component states. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. Local PostgreSQL-backed tests remain opt-in when a database is unavailable; Phase 39, Phase 40, and Phase 43 are live and smoke-tested.
+Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. Phase 39–40 gates additionally cover experiment assignment semantics, uplift/significance guards, advanced query allowlists, UTC daily-activity rollup semantics, cache invalidation, partial-result contracts, API/UI surfaces, and opt-in PostgreSQL execution. Phase 43 gates cover session scoping, idempotent notebook persistence, evidence-bound deterministic summary aggregation, saved-analysis projection, and responsive route/component states. P3 gates cover JWT claims/signature/key rotation, RBAC precedence, server-only source routing and isolation, connector contract/read-only behavior, bounded SSE framing/reconnects, and typed orchestration fallback/capabilities. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. Local PostgreSQL-backed tests remain opt-in when a database is unavailable; production activation of protected tenants requires the deployment checklist.
 
 ## Documentation
 

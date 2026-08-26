@@ -18,7 +18,13 @@ app.add_middleware(
     allow_origins=[settings.frontend_origin],
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type", "Authorization", "X-ProductLens-Session", "X-ProductLens-Access"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Last-Event-ID",
+        "X-ProductLens-Session",
+        "X-ProductLens-Access",
+    ],
 )
 app.include_router(router, prefix=settings.api_prefix)
 

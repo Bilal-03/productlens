@@ -7,6 +7,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from app.ai.insights import GroundedInsight, InsightService
+from app.ai.orchestration import AgentOrchestrator
 from app.ai.planner import AdHocQuestion, AmbiguousQuestion, QuestionPlanner, UnsafeQuestion
 from app.ai.providers import ProviderError
 from app.ai.sql_generation import SQLGenerationResult, SQLGenerator
@@ -19,7 +20,7 @@ from app.analytics.calculations import (
 )
 from app.analytics.service import AnalyticsService
 from app.analytics.sql_compiler import compile_metric
-from app.analytics.time_ranges import DATASET_AS_OF
+from app.analytics.time_ranges import source_as_of
 from app.config import Settings
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
@@ -70,6 +71,11 @@ class CopilotPipeline:
     def analyze(self, request: CopilotRequest) -> AnalysisResponse | ClarificationResponse | ErrorResponse:
         started = time.perf_counter()
         query_id = uuid4()
+        orchestration = AgentOrchestrator(
+            enabled=self.settings.multi_agent_enabled,
+            timeout_ms=self.settings.multi_agent_timeout_ms,
+            mode=request.mode,
+        )
         session_hash = hash_session(request.session_id, self.settings.session_hmac_secret.get_secret_value())
         try:
             if not self.database.consume_quota(
@@ -86,15 +92,26 @@ class CopilotPipeline:
         except DatabaseUnavailable:
             return ErrorResponse(
                 code="DATABASE_UNAVAILABLE",
-                message="The demo database is unavailable or paused. Please try again shortly.",
+                message="The analytics database is unavailable or paused. Please try again shortly.",
                 retryable=True,
                 query_id=str(query_id),
             )
 
-        planner_started = time.perf_counter()
         try:
-            plan = self.planner.plan(request.question, request.selected_metric)
+            as_of = source_as_of(self.database)
+        except DatabaseUnavailable:
+            return ErrorResponse(
+                code="DATABASE_UNAVAILABLE",
+                message="The analytics database is unavailable or paused. Please try again shortly.",
+                retryable=True,
+                query_id=str(query_id),
+            )
+
+        planner_started = orchestration.start("planner")
+        try:
+            plan = self.planner.plan(request.question, request.selected_metric, as_of=as_of)
         except UnsafeQuestion:
+            orchestration.fail("planner", planner_started)
             validation = self.validator.validate("DROP TABLE analytics.users")
             self._safe_audit(query_id, session_hash, request.question, None, validation, "rejected", None, None, "UNSAFE_REQUEST")
             return ErrorResponse(
@@ -104,8 +121,10 @@ class CopilotPipeline:
                 query_id=str(query_id),
             )
         if isinstance(plan, AmbiguousQuestion):
+            orchestration.complete("planner", planner_started)
             return ClarificationResponse(question=request.question, reason=plan.reason, options=plan.options)
         planner_ms = (time.perf_counter() - planner_started) * 1000
+        orchestration.complete("planner", planner_started)
 
         if isinstance(plan, AdHocQuestion):
             return self._analyze_ad_hoc(
@@ -114,6 +133,8 @@ class CopilotPipeline:
                 session_hash=session_hash,
                 started=started,
                 planner_ms=planner_ms,
+                orchestration=orchestration,
+                as_of=as_of,
             )
 
         definition = registry.metric(plan.metric)
@@ -123,6 +144,7 @@ class CopilotPipeline:
             self._safe_audit(query_id, session_hash, request.question, current_proposal.query, current_validation, None, None, None, "SQL_VALIDATION_FAILED")
             return ErrorResponse(code="SQL_VALIDATION_FAILED", message="The analytical query did not pass safety validation.", retryable=False, query_id=str(query_id))
 
+        analyst_started = orchestration.start("analyst")
         try:
             current_rows, current_sql, current_ms = self.analytics.execute(current_proposal)
             previous_rows: list[dict[str, Any]] = []
@@ -133,6 +155,7 @@ class CopilotPipeline:
                     compile_metric(plan.metric, plan.comparison, filters=plan.filters)
                 )
         except (DatabaseUnavailable, ValueError):
+            orchestration.fail("analyst", analyst_started)
             self._safe_audit(query_id, session_hash, request.question, current_proposal.query, current_validation, "failed", None, None, "QUERY_EXECUTION_FAILED")
             return ErrorResponse(code="QUERY_EXECUTION_FAILED", message="The validated analysis could not be completed.", retryable=True, query_id=str(query_id))
 
@@ -180,6 +203,7 @@ class CopilotPipeline:
             except (ValueError, DatabaseUnavailable):
                 continue
         drivers.sort(key=lambda item: (abs(item.contribution), item.sample_size), reverse=True)
+        orchestration.complete("analyst", analyst_started)
         primary_driver = drivers[0] if drivers else None
         deterministic = self._deterministic_insight(
             request.question,
@@ -190,12 +214,23 @@ class CopilotPipeline:
             diagnostic=plan.intent == Intent.DIAGNOSTIC,
         )
         interpretation_started = time.perf_counter()
-        narrative, provider, grounded = self.insights.interpret(
-            question=request.question,
-            metric_label=definition.label,
-            evidence=evidence,
-            deterministic=deterministic,
-        )
+        evidence_started = orchestration.start("evidence")
+        if orchestration.within_budget():
+            narrative, provider, grounded = self.insights.interpret(
+                question=request.question,
+                metric_label=definition.label,
+                evidence=evidence,
+                deterministic=deterministic,
+            )
+        else:
+            narrative, provider, grounded = deterministic, "deterministic-budget-fallback", True
+            orchestration.complete("evidence", evidence_started, fallback=True)
+        if not orchestration.has_stage("evidence"):
+            orchestration.complete(
+                "evidence",
+                evidence_started,
+                fallback=(not grounded or provider.startswith("deterministic") or "->" in provider),
+            )
         if plan.intent == Intent.DIAGNOSTIC:
             narrative = self._ensure_diagnostic_findings(narrative, evidence)
         # Grounding is part of the confidence contract: a large sample cannot
@@ -259,13 +294,14 @@ class CopilotPipeline:
             metadata=AnalysisMetadata(
                 query_id=str(query_id),
                 generated_at=datetime.now(UTC),
-                dataset_as_of=DATASET_AS_OF,
+                dataset_as_of=as_of,
                 provider=provider,
                 confidence=confidence,
                 timings=timings,
                 model=self.insights.last_usage.model if self.insights.last_usage else None,
                 input_tokens=self.insights.last_usage.input_tokens if self.insights.last_usage else None,
                 output_tokens=self.insights.last_usage.output_tokens if self.insights.last_usage else None,
+                orchestration=orchestration.finish(),
             ),
         )
         self._safe_audit(
@@ -294,6 +330,8 @@ class CopilotPipeline:
         session_hash: str,
         started: float,
         planner_ms: float,
+        orchestration: AgentOrchestrator,
+        as_of: date,
     ) -> AnalysisResponse | ErrorResponse:
         sql_started = time.perf_counter()
         if self.sql_generator is None or not self.sql_generator.available:
@@ -320,6 +358,7 @@ class CopilotPipeline:
                 query_id=str(query_id),
             )
 
+        analyst_started = orchestration.start("analyst")
         try:
             generated = self.sql_generator.generate(request.question)
         except ProviderError:
@@ -395,6 +434,9 @@ class CopilotPipeline:
                 query_id=str(query_id),
             )
 
+        orchestration.complete("analyst", analyst_started)
+        evidence_started = orchestration.start("evidence")
+        orchestration.complete("evidence", evidence_started)
         result = self._ad_hoc_response(
             request=request,
             query_id=query_id,
@@ -405,6 +447,8 @@ class CopilotPipeline:
             sql_ms=sql_ms,
             execution_ms=execution_ms,
             started=started,
+            orchestration=orchestration,
+            as_of=as_of,
         )
         self._safe_audit(
             query_id,
@@ -476,14 +520,16 @@ class CopilotPipeline:
         sql_ms: float,
         execution_ms: float,
         started: float,
+        orchestration: AgentOrchestrator,
+        as_of: date,
     ) -> AnalysisResponse:
         row_count = len(rows)
         proposal = generated.proposal
         if proposal is None:
             raise ValueError("An ad-hoc response requires a validated SQL proposal")
         period = DateRange(
-            start=DATASET_AS_OF - timedelta(days=30),
-            end=DATASET_AS_OF,
+            start=as_of - timedelta(days=30),
+            end=as_of,
             label="Query-defined period",
         )
         point = MetricPoint(
@@ -573,7 +619,7 @@ class CopilotPipeline:
             metadata=AnalysisMetadata(
                 query_id=str(query_id),
                 generated_at=datetime.now(UTC),
-                dataset_as_of=DATASET_AS_OF,
+                dataset_as_of=as_of,
                 provider=generated.provider,
                 confidence="low",
                 timings=Timings(
@@ -587,6 +633,7 @@ class CopilotPipeline:
                 model=generated.usage.model if generated.usage else None,
                 input_tokens=generated.usage.input_tokens if generated.usage else None,
                 output_tokens=generated.usage.output_tokens if generated.usage else None,
+                orchestration=orchestration.finish(),
             ),
         )
 

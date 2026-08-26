@@ -23,7 +23,12 @@ from app.analytics.calculations import (
     safe_relative_change,
 )
 from app.analytics.sql_compiler import compile_metric, compile_metric_series
-from app.analytics.time_ranges import DATASET_AS_OF, default_comparison, resolve_period
+from app.analytics.time_ranges import (
+    DATASET_AS_OF,
+    default_comparison,
+    resolve_period,
+    source_as_of,
+)
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
     AnomaliesResponse,
@@ -109,7 +114,8 @@ class ProactiveAnalyticsService:
         self.report_provider_timeout_ms = max(0, min(report_provider_timeout_ms, 10_000))
 
     def anomalies(self, period_name: str = "last_30_days", limit: int = 50) -> AnomaliesResponse:
-        period = self._resolve_public_period(period_name)
+        as_of = source_as_of(self.database)
+        period = self._resolve_public_period(period_name, as_of)
         bounded_limit = self._bounded_limit(limit)
         cache_key = self._cache_key("proactive-anomalies", {"period": period_name, "limit": bounded_limit})
         dataset_version = self.database.dataset_version()
@@ -118,22 +124,28 @@ class ProactiveAnalyticsService:
             if cached is not None:
                 return AnomaliesResponse.model_validate(cached)
 
-        records, evidence, methodology, sql, warnings, execution_ms = self._build_anomalies(period, bounded_limit)
+        records, evidence, methodology, sql, warnings, execution_ms = self._build_anomalies(period, bounded_limit, as_of)
         response = AnomaliesResponse(
             period=period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             anomalies=records,
             evidence=evidence,
             methodology=methodology,
             sql=sql,
             warnings=warnings,
-            metadata=ProactiveMetadata(execution_ms=execution_ms, generated_at=datetime.now(UTC)),
+            metadata=ProactiveMetadata(
+                execution_ms=execution_ms,
+                generated_at=datetime.now(UTC),
+                source_id=getattr(self.database, "source_id", None),
+                tenant_id=getattr(self.database, "tenant_id", None),
+            ),
         )
         self._cache_response(cache_key, dataset_version, response.model_dump(mode="json"))
         return response
 
     def pulse(self, period_name: str = "last_30_days", limit: int = 20) -> ProductPulseResponse:
-        period = self._resolve_public_period(period_name)
+        as_of = source_as_of(self.database)
+        period = self._resolve_public_period(period_name, as_of)
         bounded_limit = self._bounded_limit(limit)
         cache_key = self._cache_key("product-pulse", {"period": period_name, "limit": bounded_limit})
         dataset_version = self.database.dataset_version()
@@ -142,13 +154,13 @@ class ProactiveAnalyticsService:
             if cached is not None:
                 return ProductPulseResponse.model_validate(cached)
 
-        records, evidence, methodology, sql, warnings, execution_ms = self._build_anomalies(period, bounded_limit)
+        records, evidence, methodology, sql, warnings, execution_ms = self._build_anomalies(period, bounded_limit, as_of)
         enriched, driver_evidence, driver_queries, driver_tables, driver_warnings = self._enrich_records(records[:5])
         by_id = {record.id: record for record in enriched}
         records = [by_id.get(record.id, record) for record in records]
         response = ProductPulseResponse(
             period=period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             items=records,
             evidence=[*evidence, *driver_evidence],
             methodology=methodology,
@@ -162,6 +174,8 @@ class ProactiveAnalyticsService:
             metadata=ProactiveMetadata(
                 execution_ms=execution_ms,
                 generated_at=datetime.now(UTC),
+                source_id=getattr(self.database, "source_id", None),
+                tenant_id=getattr(self.database, "tenant_id", None),
             ),
         )
         self._cache_response(cache_key, dataset_version, response.model_dump(mode="json"))
@@ -170,8 +184,9 @@ class ProactiveAnalyticsService:
     def weekly_report(self, period_name: str = "last_week") -> WeeklyReportResponse:
         if period_name != "last_week":
             raise ValueError("Weekly reports currently support only the last completed week")
-        period = resolve_period(period_name)
-        comparison_period = default_comparison(period_name)
+        as_of = source_as_of(self.database)
+        period = resolve_period(period_name, as_of)
+        comparison_period = default_comparison(period_name, as_of)
         if comparison_period is None:
             raise ValueError("A weekly comparison period could not be resolved")
         cache_key = self._cache_key("weekly-report", {"period": period_name})
@@ -183,7 +198,7 @@ class ProactiveAnalyticsService:
 
         started = time.perf_counter()
         deadline = started + (self.report_budget_ms / 1000)
-        anomalies, evidence, methodology, anomaly_sql, warnings, _ = self._build_anomalies(period, 10)
+        anomalies, evidence, methodology, anomaly_sql, warnings, _ = self._build_anomalies(period, 10, as_of)
         driver_records = anomalies[:3]
         if driver_records and self._remaining_ms(deadline) >= 12_000:
             enriched_records, driver_evidence, driver_queries, driver_tables, driver_warnings = self._enrich_records(
@@ -215,8 +230,8 @@ class ProactiveAnalyticsService:
                     report_jobs[metric] = executor.submit(
                         self._report_metric,
                         metric,
-                        period if metric != "weekly_retention" else resolve_period("last_90_days"),
-                        comparison_period if metric != "weekly_retention" else default_comparison("last_90_days"),
+                        period if metric != "weekly_retention" else resolve_period("last_90_days", as_of),
+                        comparison_period if metric != "weekly_retention" else default_comparison("last_90_days", as_of),
                     )
 
             for key, title, metrics in self.REPORT_METRICS:
@@ -282,7 +297,7 @@ class ProactiveAnalyticsService:
         response = WeeklyReportResponse(
             period=period,
             comparison_period=comparison_period,
-            dataset_as_of=DATASET_AS_OF,
+            dataset_as_of=as_of,
             headline=narrative.headline,
             summary=narrative.summary,
             sections=sections,
@@ -307,6 +322,8 @@ class ProactiveAnalyticsService:
                 model=metadata_usage.model if metadata_usage else None,
                 input_tokens=metadata_usage.input_tokens if metadata_usage else None,
                 output_tokens=metadata_usage.output_tokens if metadata_usage else None,
+                source_id=getattr(self.database, "source_id", None),
+                tenant_id=getattr(self.database, "tenant_id", None),
             ),
         )
         self._cache_response(cache_key, dataset_version, response.model_dump(mode="json"))
@@ -387,9 +404,10 @@ class ProactiveAnalyticsService:
         self,
         period: DateRange,
         limit: int,
+        as_of: date,
     ) -> tuple[list[AnomalyRecord], list[Evidence], AnomalyMethodology, ProactiveSQLTransparency, list[str], float]:
         started = time.perf_counter()
-        analysis_period = resolve_period("last_90_days")
+        analysis_period = resolve_period("last_90_days", as_of)
         series_period = DateRange(
             start=analysis_period.start - timedelta(days=self.policy.baseline_days),
             end=analysis_period.end,
@@ -967,10 +985,10 @@ class ProactiveAnalyticsService:
         return f"{start.strftime('%b')} {start.day}–{last.strftime('%b')} {last.day}, {last.year}"
 
     @staticmethod
-    def _resolve_public_period(period_name: str) -> DateRange:
+    def _resolve_public_period(period_name: str, as_of: date = DATASET_AS_OF) -> DateRange:
         if period_name not in {"last_week", "last_30_days", "last_90_days"}:
             raise ValueError("Proactive analytics support last_week, last_30_days, or last_90_days")
-        return resolve_period(period_name)
+        return resolve_period(period_name, as_of)
 
     @staticmethod
     def _bounded_limit(limit: int) -> int:

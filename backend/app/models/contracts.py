@@ -156,6 +156,21 @@ class Timings(BaseModel):
     interpretation_ms: float = 0
 
 
+class AgentStatus(BaseModel):
+    name: Literal["planner", "analyst", "evidence"]
+    status: Literal["completed", "fallback", "skipped", "failed"]
+    duration_ms: float = Field(ge=0)
+
+
+class OrchestrationMetadata(BaseModel):
+    enabled: bool = True
+    mode: Literal["bounded_pipeline", "single_pipeline"] = "bounded_pipeline"
+    agents: list[AgentStatus] = Field(default_factory=list)
+    handoffs: int = Field(default=0, ge=0, le=3)
+    fallback: bool = False
+    bounded: bool = True
+
+
 class Interpretation(BaseModel):
     intent: Intent
     metric: str
@@ -186,6 +201,7 @@ class AnalysisMetadata(BaseModel):
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    orchestration: OrchestrationMetadata | None = None
 
 
 class AnalysisResponse(BaseModel):
@@ -296,6 +312,8 @@ class AccessContextResponse(BaseModel):
     auth_mode: AuthMode
     permissions: list[str]
     session_scoped: bool
+    source_id: str | None = None
+    source_configured: bool = True
 
 
 class ClarificationOption(BaseModel):
@@ -518,6 +536,38 @@ class ProactiveMetadata(BaseModel):
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    source_id: str | None = None
+    tenant_id: str | None = None
+
+
+class ConnectorSourceStatus(BaseModel):
+    source_id: str
+    tenant_id: str
+    kind: Literal["postgres"] = "postgres"
+    configured: bool
+    healthy: bool
+    read_only: bool = True
+    contract_version: str = "analytics-v1"
+    detail: str
+
+
+class ConnectorStatusResponse(BaseModel):
+    type: Literal["connector_status"] = "connector_status"
+    source: ConnectorSourceStatus
+
+
+class StreamMetricSnapshot(BaseModel):
+    type: Literal["snapshot", "update", "heartbeat"]
+    event_id: int = Field(ge=1)
+    generated_at: datetime
+    dataset_version: str
+    source_id: str
+    tenant_id: str
+    metric: str
+    metric_label: str
+    period: DateRange | None = None
+    value: float | None = None
+    formatted: str | None = None
 
 
 class ExperimentSummary(BaseModel):
