@@ -96,7 +96,7 @@ test("proactive analytics routes are reachable", async ({ page }) => {
 
   await page.goto("/reports/weekly");
   await expect(page.getByRole("heading", { name: "Weekly product report" })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Download Markdown/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Download Markdown/ })).toBeVisible();
 });
 
 test("experiment and advanced analytics routes are reachable", async ({ page }) => {
