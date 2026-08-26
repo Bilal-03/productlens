@@ -37,6 +37,7 @@ class WorkspaceRole(StrEnum):
 class AuthMode(StrEnum):
     ANONYMOUS = "anonymous"
     SIGNED = "signed"
+    OIDC = "oidc"
 
 
 class DateRange(BaseModel):
@@ -289,6 +290,7 @@ class NotebookSummaryResponse(BaseModel):
 class AccessContextResponse(BaseModel):
     type: Literal["access_context"] = "access_context"
     workspace_id: str
+    tenant_id: str
     subject_id: str
     role: WorkspaceRole
     auth_mode: AuthMode

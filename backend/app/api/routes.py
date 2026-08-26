@@ -45,6 +45,7 @@ from app.models.contracts import (
 )
 from app.notebook.service import NotebookService
 from app.security.access import AccessContext, AccessTokenError, Permission, resolve_access_context
+from app.security.oidc import OIDCValidator
 from app.security.session import hash_session
 from app.security.sql_validator import SQLSafetyPolicy, SQLValidator
 from app.semantic.registry import registry
@@ -52,16 +53,36 @@ from app.semantic.registry import registry
 router = APIRouter()
 
 
+@lru_cache
+def oidc_token_validator() -> OIDCValidator:
+    return OIDCValidator(get_settings())
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if authorization is None:
+        return None
+    scheme, separator, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not separator or not token:
+        raise AccessTokenError("Malformed authorization header")
+    return token.strip() or None
+
+
 def access_context(
     x_productlens_access: str | None = Header(default=None, max_length=4096),
     x_productlens_session: str | None = Header(default=None, max_length=128),
+    authorization: str | None = Header(default=None, max_length=8192),
     settings: Settings = Depends(get_settings),
+    oidc_validator: OIDCValidator = Depends(oidc_token_validator),
 ) -> AccessContext:
     try:
+        bearer_token = _bearer_token(authorization)
+        if x_productlens_access and bearer_token and x_productlens_access != bearer_token:
+            raise AccessTokenError("Conflicting access credentials")
         return resolve_access_context(
-            access_token=x_productlens_access,
+            access_token=x_productlens_access or bearer_token,
             session_id=x_productlens_session,
             settings=settings,
+            oidc_validator=oidc_validator,
         )
     except AccessTokenError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired workspace access token") from exc
@@ -149,6 +170,7 @@ def notebook_service() -> NotebookService:
 def access_context_info(context: AccessContext = Depends(access_context)) -> AccessContextResponse:
     return AccessContextResponse(
         workspace_id=context.workspace_id,
+        tenant_id=context.tenant_id,
         subject_id=context.subject_id,
         role=context.role,
         auth_mode=context.auth_mode,

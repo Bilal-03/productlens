@@ -1,4 +1,4 @@
-"""Provider-neutral signed workspace access context and RBAC policy."""
+"""Provider-neutral workspace access context, OIDC validation, and RBAC policy."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
 from app.models.contracts import AuthMode, WorkspaceRole
+from app.security.oidc import OIDCValidationError, OIDCValidator
 from app.security.session import hash_session
 
 ACCESS_TOKEN_VERSION = "plx1"
@@ -47,11 +48,14 @@ class AccessTokenClaims(BaseModel):
 @dataclass(frozen=True)
 class AccessContext:
     workspace_id: str
+    tenant_id: str
     subject_id: str
     role: WorkspaceRole
     auth_mode: AuthMode
     session_hash: str | None
     permissions: frozenset[str]
+    groups: tuple[str, ...] = ()
+    issuer: str | None = None
 
     def can(self, permission: str) -> bool:
         return permission in self.permissions
@@ -114,33 +118,39 @@ def resolve_access_context(
     access_token: str | None,
     session_id: str | None,
     settings: Settings,
+    oidc_validator: OIDCValidator | None = None,
 ) -> AccessContext:
     if access_token:
-        access_secret = settings.access_token_secret.get_secret_value() if settings.access_token_secret else ""
-        if not access_secret:
-            raise AccessTokenError("Workspace access is not configured")
-        try:
-            claims = parse_access_token(
-                access_token,
-                access_secret,
+        if access_token.startswith(f"{ACCESS_TOKEN_VERSION}."):
+            access_secret = settings.access_token_secret.get_secret_value() if settings.access_token_secret else ""
+            if not access_secret:
+                raise AccessTokenError("Workspace access is not configured")
+            claims = parse_access_token(access_token, access_secret)
+            return _signed_context(
+                workspace_id=claims.workspace_id,
+                subject_id=claims.subject_id,
+                role=claims.role,
+                auth_mode=AuthMode.SIGNED,
+                groups=(),
+                issuer=None,
+                session_id=session_id,
+                settings=settings,
             )
-        except AccessTokenError:
-            raise
-        canonical_session = AccessContext(
-            workspace_id=claims.workspace_id,
-            subject_id=claims.subject_id,
-            role=claims.role,
-            auth_mode=AuthMode.SIGNED,
-            session_hash=None,
-            permissions=_permissions(claims.role),
-        ).canonical_session_id(session_id)
-        return AccessContext(
-            workspace_id=claims.workspace_id,
-            subject_id=claims.subject_id,
-            role=claims.role,
-            auth_mode=AuthMode.SIGNED,
-            session_hash=hash_session(canonical_session, settings.session_hmac_secret.get_secret_value()),
-            permissions=_permissions(claims.role),
+
+        validator = oidc_validator or OIDCValidator(settings)
+        try:
+            identity = validator.validate(access_token)
+        except OIDCValidationError as exc:
+            raise AccessTokenError(str(exc)) from exc
+        return _signed_context(
+            workspace_id=identity.workspace_id,
+            subject_id=identity.subject_id,
+            role=identity.role,
+            auth_mode=AuthMode.OIDC,
+            groups=identity.groups,
+            issuer=identity.issuer,
+            session_id=session_id,
+            settings=settings,
         )
 
     session_hash = (
@@ -150,6 +160,7 @@ def resolve_access_context(
     )
     return AccessContext(
         workspace_id="anonymous-demo",
+        tenant_id="anonymous-demo",
         subject_id="anonymous-demo",
         role=WorkspaceRole.ANALYST,
         auth_mode=AuthMode.ANONYMOUS,
@@ -162,6 +173,42 @@ def resolve_access_context(
             Permission.NOTEBOOK_WRITE,
             Permission.NOTEBOOK_DELETE,
         }),
+    )
+
+
+def _signed_context(
+    *,
+    workspace_id: str,
+    subject_id: str,
+    role: WorkspaceRole,
+    auth_mode: AuthMode,
+    groups: tuple[str, ...],
+    issuer: str | None,
+    session_id: str | None,
+    settings: Settings,
+) -> AccessContext:
+    unsigned = AccessContext(
+        workspace_id=workspace_id,
+        tenant_id=workspace_id,
+        subject_id=subject_id,
+        role=role,
+        auth_mode=auth_mode,
+        session_hash=None,
+        permissions=_permissions(role),
+        groups=groups,
+        issuer=issuer,
+    )
+    canonical_session = unsigned.canonical_session_id(session_id)
+    return AccessContext(
+        workspace_id=workspace_id,
+        tenant_id=workspace_id,
+        subject_id=subject_id,
+        role=role,
+        auth_mode=auth_mode,
+        session_hash=hash_session(canonical_session, settings.session_hmac_secret.get_secret_value()),
+        permissions=_permissions(role),
+        groups=groups,
+        issuer=issuer,
     )
 
 

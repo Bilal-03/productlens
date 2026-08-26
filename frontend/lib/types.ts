@@ -79,9 +79,10 @@ export type NotebookSummaryResponse = {
 export type AccessContextResponse = {
   type: "access_context";
   workspace_id: string;
+  tenant_id: string;
   subject_id: string;
   role: "viewer" | "analyst" | "admin";
-  auth_mode: "anonymous" | "signed";
+  auth_mode: "anonymous" | "signed" | "oidc";
   permissions: string[];
   session_scoped: boolean;
 };

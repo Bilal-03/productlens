@@ -1,9 +1,13 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
+from app.api.routes import oidc_token_validator
 from app.config import Settings, get_settings
 from app.main import app
 from app.models.contracts import AuthMode, WorkspaceRole
@@ -15,10 +19,28 @@ from app.security.access import (
     parse_access_token,
     resolve_access_context,
 )
+from app.security.oidc import OIDCValidationError, OIDCValidator
 
 SECRET = "access-test-secret-with-at-least-32-bytes"
 SESSION_SECRET = "session-test-secret-with-at-least-32-bytes"
 client = TestClient(app)
+OIDC_ISSUER = "https://id.example.com"
+OIDC_AUDIENCE = "productlens-api"
+OIDC_PRIVATE_KEYS = {
+    "key-1": rsa.generate_private_key(public_exponent=65537, key_size=2048),
+    "key-2": rsa.generate_private_key(public_exponent=65537, key_size=2048),
+}
+
+
+class FakeJWKClient:
+    def __init__(self, keys: dict[str, object]) -> None:
+        self.keys = keys
+        self.requested_kids: list[str] = []
+
+    def get_signing_key_from_jwt(self, token: str) -> SimpleNamespace:
+        kid = jwt.get_unverified_header(token)["kid"]
+        self.requested_kids.append(kid)
+        return SimpleNamespace(key=self.keys[kid].public_key())
 
 
 def claims(
@@ -39,6 +61,35 @@ def settings() -> Settings:
         access_token_secret=SECRET,
         session_hmac_secret=SESSION_SECRET,
     )
+
+
+def oidc_settings() -> Settings:
+    return Settings(
+        session_hmac_secret=SESSION_SECRET,
+        oidc_issuer_url=OIDC_ISSUER,
+        oidc_audience=OIDC_AUDIENCE,
+        oidc_jwks_url=f"{OIDC_ISSUER}/.well-known/jwks.json",
+        oidc_role_groups={
+            "admin": ["productlens-admin"],
+            "analyst": ["productlens-analyst"],
+            "viewer": ["productlens-viewer"],
+        },
+    )
+
+
+def oidc_token(*, kid: str = "key-1", groups: list[str] | None = None, **overrides: object) -> str:
+    now = int(datetime.now(UTC).timestamp())
+    payload: dict[str, object] = {
+        "iss": OIDC_ISSUER,
+        "aud": OIDC_AUDIENCE,
+        "sub": "user-123",
+        "exp": now + 300,
+        "iat": now,
+        "workspace_id": "workspace-acme",
+        "groups": groups or ["productlens-analyst"],
+    }
+    payload.update(overrides)
+    return jwt.encode(payload, OIDC_PRIVATE_KEYS[kid], algorithm="RS256", headers={"kid": kid})
 
 
 def test_signed_access_token_round_trips_and_rejects_tampering() -> None:
@@ -148,3 +199,55 @@ def test_access_context_api_enforces_role_permissions() -> None:
     assert "notebook:write" not in context_response.json()["permissions"]
     assert blocked_response.status_code == 403
     assert invalid_response.status_code == 401
+
+
+def test_oidc_validator_checks_claims_and_maps_groups_to_roles() -> None:
+    jwks = FakeJWKClient(OIDC_PRIVATE_KEYS)
+    validator = OIDCValidator(oidc_settings(), jwks_client=jwks)
+
+    identity = validator.validate(oidc_token(groups=["productlens-viewer", "productlens-admin"]))
+
+    assert identity.subject_id == "user-123"
+    assert identity.workspace_id == "workspace-acme"
+    assert identity.role is WorkspaceRole.ADMIN
+    assert identity.groups == ("productlens-viewer", "productlens-admin")
+
+    with pytest.raises(OIDCValidationError, match="validation failed"):
+        validator.validate(oidc_token(iss="https://another-id.example.com"))
+    with pytest.raises(OIDCValidationError, match="validation failed"):
+        validator.validate(oidc_token(aud="another-api"))
+    with pytest.raises(OIDCValidationError, match="validation failed"):
+        validator.validate(oidc_token(exp=int(datetime.now(UTC).timestamp()) - 1))
+    with pytest.raises(OIDCValidationError, match="do not map"):
+        validator.validate(oidc_token(groups=["unmapped-group"]))
+
+
+def test_oidc_jwks_client_receives_rotated_key_ids() -> None:
+    jwks = FakeJWKClient(OIDC_PRIVATE_KEYS)
+    validator = OIDCValidator(oidc_settings(), jwks_client=jwks)
+
+    validator.validate(oidc_token(kid="key-1"))
+    rotated = validator.validate(oidc_token(kid="key-2", groups=["productlens-viewer"]))
+
+    assert rotated.role is WorkspaceRole.VIEWER
+    assert jwks.requested_kids == ["key-1", "key-2"]
+
+
+def test_oidc_bearer_context_is_tenant_scoped_and_exposes_oidc_mode() -> None:
+    configured = oidc_settings()
+    validator = OIDCValidator(configured, jwks_client=FakeJWKClient(OIDC_PRIVATE_KEYS))
+    app.dependency_overrides[get_settings] = lambda: configured
+    app.dependency_overrides[oidc_token_validator] = lambda: validator
+    try:
+        response = client.get(
+            "/api/v1/access/context",
+            headers={"Authorization": f"Bearer {oidc_token()}"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["auth_mode"] == "oidc"
+    assert response.json()["workspace_id"] == "workspace-acme"
+    assert response.json()["tenant_id"] == "workspace-acme"
+    assert response.json()["role"] == "analyst"

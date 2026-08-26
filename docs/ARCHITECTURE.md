@@ -53,13 +53,14 @@ Phase 43 stores a server-side snapshot of a validated `AnalysisResponse`. The cl
 ## P3 access boundary
 
 ```text
-Trusted SSO / edge gateway → plx1 signed assertion → access context + RBAC
-                           → canonical workspace session → operational history/notebook/quota state
+OIDC provider / trusted edge gateway → Bearer JWT → JWKS + issuer/audience/expiry validation
+                                    → group-to-role mapping → tenant access context + RBAC
+                                    → canonical workspace session → operational history/notebook/quota state
 ```
 
-The first P3 slice is an ingress and isolation boundary, not a complete identity product. `X-ProductLens-Access` carries a short-lived HMAC-signed assertion with workspace, subject, role, issue time, and expiry claims. FastAPI validates the assertion before applying explicit viewer/analyst/admin permissions. Signed operational sessions hash workspace, subject, and the browser session together, so two workspaces cannot share history or notebook state. The browser client has an optional session-storage bridge for a future SSO callback; the API never issues tokens.
+The first P3 slice remains an ingress and isolation boundary rather than a complete identity product. `X-ProductLens-Access` continues to carry a short-lived HMAC-signed `plx1` assertion for a trusted gateway. The API now also accepts a standard `Authorization: Bearer` OIDC JWT when `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`, and exact group mappings are configured. PyJWT validates an asymmetric algorithm against the deployment-configured JWKS; its cached JWKS client refreshes when a rotated key id appears, while issuer, audience, required subject, and expiry claims are verified before RBAC is applied. Group mappings use explicit admin/analyst/viewer sets with admin precedence and fail closed when a token has no mapped role.
 
-The current synthetic analytics views remain a shared demo dataset. Dataset-level tenant isolation will be added only with connector-backed source registration and a tenant-aware analytics boundary. Streaming ingestion, external connectors, enterprise SSO provisioning, multi-agent orchestration, and additional ML models remain the next P3 work rather than claims of this foundation.
+Signed operational sessions hash workspace/tenant, subject, and the browser session together, so two workspaces cannot share history or notebook state. The browser client keeps an optional short-lived assertion in session storage and automatically uses the bearer scheme for JWT-shaped tokens; token issuance, refresh, and provider login remain owned by the identity provider or trusted gateway. The current synthetic analytics views remain a shared demo dataset: the access context now carries a tenant boundary for the next connector slice, but dataset-level tenant isolation is not claimed until connector-backed source registration is enforced. Streaming ingestion, external connectors, enterprise SSO provisioning, multi-agent orchestration, and additional ML models remain deferred P3 work.
 
 ## Boundaries
 

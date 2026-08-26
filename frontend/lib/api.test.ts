@@ -28,4 +28,12 @@ describe("workspace access client", () => {
     expect(new Headers(requestInit?.headers).get("X-ProductLens-Access")).toBe("signed-access-assertion");
     expect(new Headers(requestInit?.headers).get("Content-Type")).toBe("application/json");
   });
+
+  it("uses the standard bearer header for OIDC-shaped tokens", () => {
+    setAccessToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature");
+
+    expect(getAccessHeaders()).toEqual({
+      Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
+    });
+  });
 });

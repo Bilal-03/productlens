@@ -25,7 +25,11 @@ export function getAccessToken(): string | null {
 
 export function getAccessHeaders(): Record<string, string> {
   const token = getAccessToken();
-  return token ? { "X-ProductLens-Access": token } : {};
+  if (!token) return {};
+  if (token.startsWith("plx1.")) return { "X-ProductLens-Access": token };
+  // OIDC access tokens are standard three-part JWTs and use the bearer scheme.
+  if (token.split(".").length === 3) return { Authorization: `Bearer ${token}` };
+  return { "X-ProductLens-Access": token };
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
