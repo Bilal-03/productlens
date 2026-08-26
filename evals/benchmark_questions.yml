@@ -1,7 +1,7 @@
 questions:
   - {question: "What was revenue last month?", intent: revenue, metric: revenue, dimensions: [], tables: [transactions, users]}
   - {question: "How did checkout conversion change week over week?", intent: comparison, metric: checkout_conversion, dimensions: [], tables: [events, sessions]}
-  - {question: "Which acquisition channel converts best?", intent: ranking, metric: signup_conversion, dimensions: [channel], tables: [events, sessions]}
+  - {question: "Which acquisition channel converts best?", intent: ranking, metric: channel_conversion, dimensions: [channel], tables: [events, sessions], chart_type: bar}
   - {question: "Which plan generates the most MRR?", intent: ranking, metric: mrr, dimensions: [plan], tables: [subscriptions, users]}
   - {question: "Where are users dropping during onboarding?", intent: funnel, metric: activation_rate, dimensions: [], tables: [events]}
   - {question: "What is D30 retention?", intent: retention, metric: d30_retention, dimensions: [], tables: [users, events]}
@@ -9,7 +9,7 @@ questions:
   - {question: "Which features are associated with better retention?", intent: feature_adoption, metric: feature_adoption, dimensions: [feature], tables: [events, users]}
   - {question: "How does activation differ between mobile and desktop?", intent: segmentation, metric: activation_rate, dimensions: [device], tables: [events, sessions]}
   - {question: "Why did checkout conversion fall last week?", intent: diagnostic, metric: checkout_conversion, dimensions: [checkout_context, device, browser, channel], tables: [events, sessions]}
-  - {question: "Why did revenue decline this month?", intent: diagnostic, metric: revenue, dimensions: [plan, channel, company_size], tables: [transactions, users]}
+  - {question: "Why did revenue decline this month?", intent: diagnostic, metric: revenue, dimensions: [plan, channel, company_size, customer_type, revenue_motion, failure_reason], tables: [transactions, users]}
   - {question: "What was MRR last month?", intent: revenue, metric: mrr, dimensions: [], tables: [subscriptions]}
   - {question: Show monthly active users, intent: kpi, metric: mau, dimensions: [], tables: [events]}
   - {question: "What is daily active usage?", intent: kpi, metric: dau, dimensions: [], tables: [events]}
@@ -49,3 +49,11 @@ questions:
   - {question: Show onboarding activation by company size, intent: segmentation, metric: activation_rate, dimensions: [company_size], tables: [events, users]}
   - {question: "How many weekly active users?", intent: kpi, metric: wau, dimensions: [], tables: [events]}
   - {question: "Which device has the strongest D7 retention?", intent: ranking, metric: d7_retention, dimensions: [device], tables: [users, events]}
+  - {question: Show weekly retention, intent: retention, metric: weekly_retention, dimensions: [], tables: [users, events], chart_type: heatmap}
+  - {question: Show monthly retention, intent: retention, metric: monthly_retention, dimensions: [], tables: [users, events], chart_type: heatmap}
+  - {question: "How many visitors did we have last week?", intent: kpi, metric: visitors, dimensions: [], tables: [events, sessions], chart_type: bar}
+  - {question: "How many signups did we have last week?", intent: kpi, metric: signups, dimensions: [], tables: [events, users], chart_type: bar}
+  - {question: "How many activated users did we have last week?", intent: kpi, metric: activated_users, dimensions: [], tables: [events, users], chart_type: bar}
+  - {question: "How many paid users did we have last week?", intent: kpi, metric: paid_users, dimensions: [], tables: [users, sessions, subscriptions, transactions], chart_type: bar}
+  - {question: "Show channel conversion by campaign", intent: segmentation, metric: channel_conversion, dimensions: [campaign], tables: [events, users], chart_type: bar}
+  - {question: "How does feature adoption differ by channel?", intent: segmentation, metric: feature_adoption, dimensions: [channel], tables: [events, users], chart_type: bar}

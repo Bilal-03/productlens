@@ -6,7 +6,7 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from app.ai.providers import ProviderError, ProviderRouter
+from app.ai.providers import ProviderError, ProviderRouter, ProviderUsage
 from app.models.contracts import SQLProposal, SQLValidation
 from app.security.sql_validator import SQLValidator
 from app.semantic.registry import registry
@@ -34,6 +34,7 @@ class SQLGenerationResult:
     initial_validation: SQLValidation | None = None
     repair_query: str | None = None
     error_code: str | None = None
+    usage: ProviderUsage | None = None
 
 
 class SQLGenerator:
@@ -90,6 +91,7 @@ can reject it.
             separators=(",", ":"),
         )
         candidate, provider = self.router.complete_structured(SQLProposal, self.SYSTEM_PROMPT, payload)
+        usage = getattr(self.router, "last_usage", None)
         first_validation = self.validator.validate(candidate.query)
         if first_validation.valid:
             return SQLGenerationResult(
@@ -98,6 +100,7 @@ can reject it.
                 provider=provider,
                 initial_query=candidate.query,
                 initial_validation=first_validation,
+                usage=usage,
             )
 
         # Safety failures are terminal. In particular, do not let a repair
@@ -110,6 +113,7 @@ can reject it.
                 initial_query=candidate.query,
                 initial_validation=first_validation,
                 error_code=self._error_code(first_validation),
+                usage=usage,
             )
 
         repair_payload = json.dumps(
@@ -129,6 +133,7 @@ can reject it.
                 self.REPAIR_PROMPT,
                 repair_payload,
             )
+            repair_usage = getattr(self.router, "last_usage", None)
         except ProviderError:
             return SQLGenerationResult(
                 proposal=None,
@@ -139,6 +144,7 @@ can reject it.
                 initial_query=candidate.query,
                 initial_validation=first_validation,
                 error_code="LLM_UNAVAILABLE",
+                usage=usage,
             )
         repaired_validation = self.validator.validate(repaired.query)
         provider_trace = provider if repair_provider == provider else f"{provider}+repair:{repair_provider}"
@@ -152,6 +158,7 @@ can reject it.
                 initial_query=candidate.query,
                 initial_validation=first_validation,
                 repair_query=repaired.query,
+                usage=repair_usage,
             )
         return SQLGenerationResult(
             proposal=None,
@@ -163,6 +170,7 @@ can reject it.
             initial_validation=first_validation,
             repair_query=repaired.query,
             error_code=self._error_code(repaired_validation),
+            usage=repair_usage,
         )
 
     @staticmethod

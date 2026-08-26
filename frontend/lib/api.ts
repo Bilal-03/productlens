@@ -23,3 +23,8 @@ export function analyze(question: string, mode: "quick" | "deep", selected_metri
   return api<CopilotResponse>("/copilot/analyze", { method: "POST", body: JSON.stringify({ question, mode, selected_metric, session_id: getSessionId() }) });
 }
 
+export function getHistoryItem(queryId: string) {
+  return api<CopilotResponse>(`/history/${encodeURIComponent(queryId)}`, {
+    headers: { "X-ProductLens-Session": getSessionId() },
+  });
+}

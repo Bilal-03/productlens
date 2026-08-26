@@ -5,7 +5,7 @@ import re
 
 from pydantic import BaseModel, Field
 
-from app.ai.providers import ProviderError, ProviderRouter
+from app.ai.providers import ProviderError, ProviderRouter, ProviderUsage
 from app.models.contracts import Evidence, Finding, Recommendation
 
 
@@ -21,6 +21,7 @@ class GroundedInsight(BaseModel):
 class InsightService:
     def __init__(self, router: ProviderRouter) -> None:
         self.router = router
+        self.last_usage: ProviderUsage | None = None
 
     def interpret(
         self,
@@ -30,6 +31,7 @@ class InsightService:
         evidence: list[Evidence],
         deterministic: GroundedInsight,
     ) -> tuple[GroundedInsight, str, bool]:
+        self.last_usage = None
         if not self.router.available:
             return deterministic, "deterministic", True
         system = (
@@ -41,7 +43,9 @@ class InsightService:
         payload = json.dumps({"question": question, "metric": metric_label, "evidence": [item.model_dump() for item in evidence]})
         try:
             candidate, provider = self.router.complete_structured(GroundedInsight, system, payload)
+            self.last_usage = getattr(self.router, "last_usage", None)
         except ProviderError:
+            self.last_usage = None
             return deterministic, "deterministic", True
         grounded = self._validate(candidate, evidence)
         return (candidate, provider, True) if grounded else (deterministic, "deterministic-grounding-fallback", False)

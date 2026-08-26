@@ -1,9 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowUp, BrainCircuit, Search, Sparkles } from "lucide-react";
-import { analyze } from "@/lib/api";
+import { analyze, getHistoryItem } from "@/lib/api";
 import type { AnalysisResponse, ClarificationResponse, ErrorResponse } from "@/lib/types";
 import { Badge, Button, Card } from "@/components/ui";
 import { PageHeading } from "@/components/page-heading";
@@ -13,11 +13,12 @@ const examples=["Why did checkout conversion fall last week?","Where are users d
 const stages=["Understanding the question","Resolving governed metrics","Generating safe SQL","Validating the query","Analyzing product data","Investigating drivers","Preparing evidence"];
 
 export function Copilot() {
-  const params=useSearchParams(); const initial=params.get("question")??"";
+  const params=useSearchParams(); const initial=params.get("question")??""; const initialQueryId=params.get("query_id"); const initialized=useRef<string|null>(null);
   const [question,setQuestion]=useState(initial); const [mode,setMode]=useState<"quick"|"deep">("deep"); const [result,setResult]=useState<AnalysisResponse|null>(null); const [clarification,setClarification]=useState<ClarificationResponse|null>(null); const [error,setError]=useState<ErrorResponse|null>(null); const [loading,setLoading]=useState(false); const [stage,setStage]=useState(0);
-  useEffect(()=>{if(initial) void run(initial);},[]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{const key=initialQueryId?`history:${initialQueryId}`:initial?`question:${initial}`:"";if(!key||initialized.current===key)return;initialized.current=key;if(initialQueryId) void reopen(initialQueryId); else void run(initial);},[initial,initialQueryId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(!loading)return;const timer=setInterval(()=>setStage((value)=>Math.min(value+1,stages.length-1)),700);return()=>clearInterval(timer);},[loading]);
   async function run(value=question,selectedMetric?:string){if(value.trim().length<3)return;setQuestion(value);setLoading(true);setStage(0);setError(null);setClarification(null);try{const response=await analyze(value,mode,selectedMetric);if(response.type==="analysis"){setResult(response);}else if(response.type==="clarification"){setResult(null);setClarification(response);}else{setResult(null);setError(response);}}catch(caught){setResult(null);setError({type:"error",code:"API_UNAVAILABLE",message:caught instanceof Error?caught.message:"The analysis service is unavailable.",retryable:true});}finally{setLoading(false);}}
+  async function reopen(queryId:string){setLoading(true);setStage(stages.length-1);setError(null);setClarification(null);try{const response=await getHistoryItem(queryId);if(response.type==="analysis"){setMode(response.mode);setQuestion(response.question);setResult(response);}else if(response.type==="clarification"){setClarification(response);}else{setError(response);}}catch(caught){setError({type:"error",code:"HISTORY_UNAVAILABLE",message:caught instanceof Error?caught.message:"The saved analysis is unavailable.",retryable:false});}finally{setLoading(false);}}
   function submit(event:FormEvent){event.preventDefault();void run();}
   return <><PageHeading eyebrow="AI analytics copilot" title="Ask your product data" description="From a business question to a validated investigation—with governed definitions, deterministic calculations, and evidence you can inspect." action={<div className="flex rounded-lg border border-[#e1e5ec] bg-white p-1"><button onClick={()=>setMode("quick")} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${mode==="quick"?"bg-[#171a23] text-white":"text-[#697080]"}`}>Quick answer</button><button onClick={()=>setMode("deep")} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${mode==="deep"?"bg-[#171a23] text-white":"text-[#697080]"}`}>Deep dive</button></div>}/>
     <Card className="p-3 shadow-[0_12px_40px_rgba(35,31,92,.06)]"><form onSubmit={submit} className="flex items-end gap-3"><div className="flex flex-1 items-start gap-3 px-2 py-2"><Search size={19} className="mt-1 text-[#8a91a0]"/><textarea value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Ask anything about your product data…" className="min-h-12 flex-1 resize-none border-0 bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-[#a1a7b3]" aria-label="Product analytics question"/></div><Button type="submit" size="lg" disabled={loading||question.trim().length<3} aria-label="Run analysis"><ArrowUp size={18}/></Button></form></Card>
@@ -27,4 +28,3 @@ export function Copilot() {
     {error&&<Card className="mt-7 border-[#ffd8dc] bg-[#fffafb] p-6"><Badge tone="warning">{error.code.replaceAll("_"," ")}</Badge><h2 className="mt-3 text-lg font-bold">Analysis could not be completed</h2><p className="mt-2 text-sm text-[#707786]">{error.message}</p>{error.retryable&&<Button className="mt-5" variant="secondary" onClick={()=>void run()}>Try again</Button>}</Card>}
     {result&&<CopilotResult result={result} onFollowUp={(next)=>void run(next)}/>}</>;
 }
-

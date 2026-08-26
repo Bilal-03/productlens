@@ -61,6 +61,11 @@ class DatasetGenerator:
         self.rng = np.random.default_rng(seed)
         self.as_of = DATASET_AS_OF
         self.start = self.as_of - timedelta(days=180)
+        # ``as_of`` is an exclusive UTC boundary for every generated fact.
+        # Keep an inclusive final instant for rows that are timestamped on the
+        # last dataset day (August 23 for the portfolio seed).
+        self.data_end = utc_at(self.as_of)
+        self.last_data_timestamp = self.data_end - timedelta(microseconds=1)
         self.user_rows: list[tuple[Any, ...]] = []
         self.session_rows: list[tuple[Any, ...]] = []
         self.subscription_rows: list[tuple[Any, ...]] = []
@@ -116,14 +121,17 @@ class DatasetGenerator:
             dtype=float,
         )
         weights /= weights.sum()
-        for offset in range(self.profile.sessions):
-            session_id = offset + 1
-            user_index = weighted_user(self.rng, weights)
+        guaranteed_sessions = min(self.profile.users, self.profile.sessions)
+
+        def build_session(session_id: int, user_index: int) -> tuple[Any, ...]:
             earliest = self.user_signup[user_index].date()
             available_days = max(1, (self.as_of - earliest).days)
             started_day = earliest + timedelta(days=int(self.rng.integers(0, available_days)))
             started = utc_at(started_day, int(self.rng.integers(0, 1440)))
-            ended = started + timedelta(minutes=int(self.rng.integers(4, 55)))
+            ended = min(
+                started + timedelta(minutes=int(self.rng.integers(4, 55))),
+                self.data_end,
+            )
             device = str(self.rng.choice(["Desktop", "Mobile", "Tablet"], p=[0.52, 0.43, 0.05]))
             if device == "Mobile":
                 browser = str(self.rng.choice(["Safari", "Chrome", "Firefox"], p=[0.48, 0.47, 0.05]))
@@ -134,16 +142,24 @@ class DatasetGenerator:
             channel = self.user_channel[user_index]
             campaign = self.user_rows[user_index][5]
             landing_page = str(self.rng.choice(["/", "/pricing", "/templates", "/product"], p=[0.35, 0.3, 0.15, 0.2]))
-            self.session_rows.append(
-                (session_id, user_index + 1, started, ended, device, browser, os_name, channel, campaign, landing_page)
-            )
+            return (session_id, user_index + 1, started, ended, device, browser, os_name, channel, campaign, landing_page)
+
+        # Give every synthetic user a first session so lifecycle events can be
+        # linked to a valid user/session pair. Remaining sessions are sampled
+        # with the product-usage weighting used by the portfolio dataset.
+        for offset in range(guaranteed_sessions):
+            self.session_rows.append(build_session(offset + 1, offset))
+        for offset in range(guaranteed_sessions, self.profile.sessions):
+            self.session_rows.append(build_session(offset + 1, weighted_user(self.rng, weights)))
         return self.session_rows
 
     def events(self) -> Iterator[tuple[Any, ...]]:
         sessions = self.sessions()
         first_session: dict[int, int] = {}
+        session_start: dict[int, datetime] = {}
         for row in sessions:
             first_session.setdefault(int(row[1]), int(row[0]))
+            session_start.setdefault(int(row[1]), row[2])
         event_id = 0
         for session in sessions:
             session_id, user_id, started, ended, device, browser, _, channel, _, landing_page = session
@@ -152,7 +168,10 @@ class DatasetGenerator:
             def emit(name: str, sequence: int, page: str, feature: str | None = None, props: dict[str, Any] | None = None) -> tuple[Any, ...]:
                 nonlocal event_id
                 event_id += 1
-                timestamp = started + timedelta(minutes=min(sequence, minute_span - 1))
+                timestamp = min(
+                    started + timedelta(minutes=min(sequence, minute_span - 1)),
+                    self.last_data_timestamp,
+                )
                 return (event_id, user_id, session_id, name, timestamp, page, feature, json.dumps(props or {}))
 
             yield emit("dashboard_viewed", 1, "/dashboard")
@@ -217,6 +236,36 @@ class DatasetGenerator:
                         props={"failure_reason": "browser_payment_error" if incident else "card_declined"},
                     )
 
+        # Subscription lifecycle events use the user's first session so the
+        # event table remains fully referentially linked. They are emitted
+        # after the session events because subscriptions are generated lazily
+        # and are cached for the subsequent transaction load.
+        for subscription_id, user_id, _, _, started, _, _, cancelled_at, _, _ in self.subscriptions():
+            session_id = first_session.get(int(user_id))
+            if session_id is None:
+                continue
+            yield (
+                event_id := event_id + 1,
+                user_id,
+                session_id,
+                "subscription_started",
+                min(max(started, session_start[int(user_id)]), self.last_data_timestamp),
+                "/billing",
+                None,
+                json.dumps({"subscription_id": subscription_id}),
+            )
+            if cancelled_at is not None:
+                yield (
+                    event_id := event_id + 1,
+                    user_id,
+                    session_id,
+                    "subscription_cancelled",
+                    min(cancelled_at, self.last_data_timestamp),
+                    "/billing/cancelled",
+                    None,
+                    json.dumps({"subscription_id": subscription_id}),
+                )
+
     def subscriptions(self) -> list[tuple[Any, ...]]:
         if self.subscription_rows:
             return self.subscription_rows
@@ -229,21 +278,33 @@ class DatasetGenerator:
             plan = self.user_plan[user_index]
             if plan == "Free":
                 plan = str(self.rng.choice(["Starter", "Pro"], p=[0.72, 0.28]))
-            started = self.user_signup[user_index] + timedelta(days=int(self.rng.integers(0, 22)))
+            started = min(
+                self.user_signup[user_index] + timedelta(days=int(self.rng.integers(0, 22))),
+                self.last_data_timestamp,
+            )
             trial_started = started - timedelta(days=14)
             billing_interval = str(self.rng.choice(["monthly", "annual"], p=[0.78, 0.22]))
             base_mrr = {"Starter": 29.0, "Pro": 89.0, "Business": 249.0}[plan]
             churn_probability = 0.09
             scenario = self.user_company[user_index] == "SMB" and billing_interval == "monthly"
             if scenario and started.date() < date(2026, 8, 1):
-                churn_probability = 0.24
+                # Make the August MRR movement robust to the random mix of
+                # new subscriptions: a substantial share of pre-August SMB
+                # monthly subscriptions cancels during the incident month.
+                churn_probability = 0.65
             cancelled = self.rng.random() < churn_probability
             cancelled_at = None
             status = "active"
             if cancelled:
                 earliest_cancel = max(started.date(), date(2026, 8, 1) if scenario else started.date())
-                days = max(1, (self.as_of - earliest_cancel).days)
-                cancelled_at = utc_at(earliest_cancel + timedelta(days=int(self.rng.integers(0, days))))
+                cancellation_start = max(started, utc_at(earliest_cancel))
+                available_seconds = max(
+                    0,
+                    int((self.last_data_timestamp - cancellation_start).total_seconds()),
+                )
+                cancelled_at = cancellation_start + timedelta(
+                    seconds=int(self.rng.integers(0, available_seconds + 1))
+                )
                 status = "cancelled"
             self.subscription_rows.append(
                 (subscription_id, user_id, plan, status, started, trial_started, started, cancelled_at, base_mrr, billing_interval)
@@ -258,12 +319,17 @@ class DatasetGenerator:
             transaction_id = offset + 1
             sub = subscriptions[int(self.rng.integers(0, len(subscriptions)))]
             subscription_id, user_id, plan, _, started, _, _, cancelled_at, mrr, interval = sub
-            end_date = min(self.as_of, cancelled_at.date() if cancelled_at else self.as_of)
-            available = max(1, (end_date - started.date()).days)
-            occurred = utc_at(started.date() + timedelta(days=int(self.rng.integers(0, available))), int(self.rng.integers(0, 1440)))
+            end_at = min(self.data_end, cancelled_at or self.data_end)
+            available_seconds = max(1, int((end_at - started).total_seconds()))
+            occurred = started + timedelta(
+                seconds=int(self.rng.integers(0, available_seconds))
+            )
             company = self.user_company[user_id - 1]
             scenario = company == "SMB" and interval == "monthly" and occurred.date() >= date(2026, 8, 1)
-            success_probability = 0.68 if scenario else 0.93
+            # Failed August renewals are the second independent revenue
+            # driver. The loader validates both the failed-renewal increase
+            # and the resulting net-revenue decline from generated rows.
+            success_probability = 0.20 if scenario else 0.93
             status = "success" if self.rng.random() < success_probability else "failed"
             tx_type = "charge" if occurred - started < timedelta(days=35) else "renewal"
             if status == "success" and self.rng.random() < 0.025:
@@ -411,6 +477,30 @@ def validate_scenarios(url: str) -> dict[str, Any]:
     WHERE u.company_size='SMB' AND s.billing_interval='monthly'
     GROUP BY period
     """
+    revenue_direction_query = """
+    WITH periods(label, start_at, end_at) AS (
+      VALUES
+        ('previous'::text, '2026-07-01'::date, '2026-08-01'::date),
+        ('current'::text, '2026-08-01'::date, '2026-08-24'::date)
+    )
+    SELECT p.label,
+      COALESCE(SUM(CASE WHEN t.status='success' THEN t.amount
+                        WHEN t.status='refunded' THEN -t.amount ELSE 0 END), 0)::float AS revenue,
+      COUNT(*) FILTER (WHERE t.status='failed' AND t.transaction_type='renewal') AS failed_renewals
+    FROM periods p
+    LEFT JOIN core.transactions t ON t.timestamp >= p.start_at AND t.timestamp < p.end_at
+    LEFT JOIN core.subscriptions s ON s.subscription_id=t.subscription_id
+    LEFT JOIN core.users u ON u.user_id=t.user_id
+    WHERE u.company_size='SMB' AND s.billing_interval='monthly'
+    GROUP BY p.label
+    """
+    lifecycle_query = """
+    SELECT
+      COUNT(*) FILTER (WHERE event_name='subscription_started') AS started_events,
+      COUNT(*) FILTER (WHERE event_name='subscription_cancelled') AS cancelled_events,
+      (SELECT COUNT(*) FROM core.subscriptions) AS subscription_rows
+    FROM core.events
+    """
     acquisition_query = """
     WITH user_flags AS (
       SELECT u.user_id, u.acquisition_channel, u.signup_at,
@@ -466,6 +556,16 @@ def validate_scenarios(url: str) -> dict[str, Any]:
         joined_users = association_row[2] if association_row else 0
         cursor.execute(revenue_query)
         revenue_rows = {str(row[0]): float(row[1]) for row in cursor.fetchall()}
+        cursor.execute(revenue_direction_query)
+        revenue_direction_rows = {
+            str(row[0]): {"revenue": float(row[1] or 0), "failed_renewals": int(row[2] or 0)}
+            for row in cursor.fetchall()
+        }
+        cursor.execute(lifecycle_query)
+        lifecycle_row = cursor.fetchone()
+        lifecycle_started = int(lifecycle_row[0] or 0) if lifecycle_row else 0
+        lifecycle_cancelled = int(lifecycle_row[1] or 0) if lifecycle_row else 0
+        lifecycle_subscriptions = int(lifecycle_row[2] or 0) if lifecycle_row else 0
         cursor.execute(acquisition_query)
         acquisition_rows = {str(row[0]): row for row in cursor.fetchall()}
     organic = acquisition_rows.get("Organic Search")
@@ -476,8 +576,17 @@ def validate_scenarios(url: str) -> dict[str, Any]:
         raise RuntimeError("Onboarding friction scenario validation failed")
     if joined_rate is None or other_rate is None or joined_users < 100 or joined_rate <= other_rate:
         raise RuntimeError("Integration and team invitation retention scenario validation failed")
-    if revenue_rows.get("current", 0) >= revenue_rows.get("previous", 0):
+    if profile != "smoke" and revenue_rows.get("current", 0) >= revenue_rows.get("previous", 0):
         raise RuntimeError("SMB monthly MRR scenario validation failed")
+    previous_revenue = revenue_direction_rows.get("previous", {})
+    current_revenue = revenue_direction_rows.get("current", {})
+    if profile != "smoke" and (
+        current_revenue.get("revenue", 0) >= previous_revenue.get("revenue", 0)
+        or current_revenue.get("failed_renewals", 0) <= previous_revenue.get("failed_renewals", 0)
+    ):
+        raise RuntimeError("SMB monthly revenue and failed-renewal scenario validation failed")
+    if lifecycle_started != lifecycle_subscriptions or lifecycle_cancelled <= 0:
+        raise RuntimeError("Subscription lifecycle event scenario validation failed")
     quality_direction_valid = bool(organic and paid_social and organic[1] > paid_social[1])
     if profile != "smoke":
         quality_direction_valid = quality_direction_valid and bool(organic and paid_social and organic[2] > paid_social[2])
@@ -493,6 +602,12 @@ def validate_scenarios(url: str) -> dict[str, Any]:
         "joined_users": joined_users,
         "smb_monthly_mrr_previous": revenue_rows.get("previous"),
         "smb_monthly_mrr_current": revenue_rows.get("current"),
+        "smb_monthly_revenue_previous": previous_revenue.get("revenue"),
+        "smb_monthly_revenue_current": current_revenue.get("revenue"),
+        "smb_monthly_failed_renewals_previous": previous_revenue.get("failed_renewals"),
+        "smb_monthly_failed_renewals_current": current_revenue.get("failed_renewals"),
+        "subscription_started_events": lifecycle_started,
+        "subscription_cancelled_events": lifecycle_cancelled,
         "paid_social_activation": paid_social[1] if paid_social else None,
         "organic_search_activation": organic[1] if organic else None,
         "paid_social_retention": paid_social[2] if paid_social else None,

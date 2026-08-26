@@ -131,13 +131,19 @@ class DatabaseService:
         execution_ms: float | None,
         row_count: int | None,
         error_code: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> None:
         statement = text(
             """INSERT INTO operational.query_audit
             (query_id, session_hash, question, generated_sql, validation_status, execution_status,
-             validation_errors, execution_ms, row_count, error_code)
+             validation_errors, execution_ms, row_count, error_code, provider, model,
+             input_tokens, output_tokens)
             VALUES (:query_id, :session_hash, :question, :generated_sql, :validation_status,
-                    :execution_status, CAST(:validation_errors AS jsonb), :execution_ms, :row_count, :error_code)"""
+                    :execution_status, CAST(:validation_errors AS jsonb), :execution_ms, :row_count,
+                    :error_code, :provider, :model, :input_tokens, :output_tokens)"""
         )
         with self.app_engine.begin() as connection:
             connection.execute(
@@ -153,6 +159,10 @@ class DatabaseService:
                     "execution_ms": execution_ms,
                     "row_count": row_count,
                     "error_code": error_code,
+                    "provider": provider,
+                    "model": model,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
                 },
             )
 
@@ -195,7 +205,16 @@ class DatabaseService:
                 row = connection.execute(statement, {"session_hash": session_hash, "query_id": query_id}).mappings().first()
         except Exception as exc:
             raise DatabaseUnavailable("The history database is unavailable") from exc
-        return dict(row["response"]) if row and row["response"] else None
+        if not row or not row["response"]:
+            return None
+        response = row["response"]
+        if isinstance(response, str):
+            try:
+                parsed = json.loads(response)
+            except json.JSONDecodeError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return dict(response) if isinstance(response, dict) else None
 
     def consume_quota(self, session_hash: str, per_hour: int, global_day: int) -> bool:
         now = datetime.now(UTC)

@@ -5,7 +5,7 @@ from typing import TypeVar
 import pytest
 from pydantic import BaseModel
 
-from app.ai.providers import LLMProvider, ProviderError, ProviderRouter
+from app.ai.providers import LLMProvider, ProviderError, ProviderRouter, ProviderUsage
 from app.config import Settings
 
 
@@ -35,6 +35,13 @@ class SuccessfulProvider(LLMProvider):
     def complete_structured(self, response_model: type[TModel], system: str, user: str) -> TModel:
         self.calls += 1
         return response_model.model_validate({"value": 7})
+
+
+class UsageProvider(SuccessfulProvider):
+    def complete_structured(self, response_model: type[TModel], system: str, user: str) -> TModel:
+        result = super().complete_structured(response_model, system, user)
+        self.last_usage = ProviderUsage(provider=self.name, model="test-model", input_tokens=11, output_tokens=7, latency_ms=1.5)
+        return result
 
 
 def router_with_providers(*providers: LLMProvider) -> ProviderRouter:
@@ -69,3 +76,15 @@ def test_provider_router_attempts_at_most_one_fallback() -> None:
     assert primary.calls == 1
     assert fallback.calls == 1
     assert third.calls == 0
+
+
+def test_provider_router_exposes_non_sensitive_usage_metadata() -> None:
+    provider = UsageProvider()
+    router = router_with_providers(provider)
+    result, trace = router.complete_structured(Completion, "system", "user")
+    assert result.value == 7
+    assert trace == "groq"
+    assert router.last_usage is not None
+    assert router.last_usage.model == "test-model"
+    assert router.last_usage.input_tokens == 11
+    assert router.last_usage.output_tokens == 7

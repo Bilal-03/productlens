@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
@@ -21,13 +22,42 @@ class SQLSafetyPolicy:
             "pg_read_file",
             "pg_read_binary_file",
             "pg_ls_dir",
+            "pg_stat_file",
             "dblink",
+            "dblink_connect",
+            "dblink_connect_u",
+            "dblink_exec",
             "lo_import",
             "lo_export",
             "current_setting",
             "set_config",
             "pg_backend_pid",
+            "pg_terminate_backend",
+            "pg_cancel_backend",
+            "pg_reload_conf",
+            "pg_advisory_lock",
+            "pg_advisory_unlock",
+            "pg_advisory_xact_lock",
+            "pg_advisory_xact_unlock",
             "pg_sleep",
+            "pg_sleep_for",
+            "pg_sleep_until",
+            "generate_series",
+            "exploding_generate_series",
+            "explode",
+            "unnest",
+            "regexp_split_to_table",
+            "jsonb_to_recordset",
+            "json_to_recordset",
+            "nextval",
+            "setval",
+            "currval",
+            "lastval",
+            "txid_current",
+            "txid_current_snapshot",
+            "setseed",
+            "rand",
+            "random",
             "version",
             "current_user",
             "session_user",
@@ -89,6 +119,7 @@ class SQLValidator:
         if any(
             join.args.get("kind") == "CROSS"
             or (not join.args.get("on") and not join.args.get("using"))
+            or self._is_unbounded_join(join)
             for join in joins
         ):
             errors.append("Cross or unbounded joins are not allowed")
@@ -165,7 +196,7 @@ class SQLValidator:
                 errors.append("LIMIT must be a fixed integer")
 
         deduped = list(dict.fromkeys(errors))
-        failure_kind: str | None = None
+        failure_kind: Literal["syntax", "schema", "unsafe", "complexity"] | None = None
         if deduped:
             # Only parser/schema failures are eligible for the single repair attempt.
             # Anything that crosses the safety boundary is deliberately classified as
@@ -206,3 +237,13 @@ class SQLValidator:
             limited=limited,
             failure_kind=failure_kind,
         )
+
+    @staticmethod
+    def _is_unbounded_join(join: exp.Join) -> bool:
+        predicate = join.args.get("on")
+        if isinstance(predicate, exp.Boolean) and predicate.this is True:
+            return True
+        if predicate is None:
+            return False
+        normalized = predicate.sql(dialect="postgres").replace(" ", "").lower()
+        return normalized in {"true", "1=1", "0=0"}

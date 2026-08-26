@@ -14,10 +14,15 @@ from app.analytics.service import AnalyticsService
 from app.config import Settings, get_settings
 from app.database.service import DatabaseService, DatabaseUnavailable
 from app.models.contracts import (
+    AcquisitionAnalyticsResponse,
+    AcquisitionRequest,
     AnalyticsRequest,
     CopilotRequest,
     CopilotResponse,
+    FeatureAdoptionAnalyticsResponse,
     FunnelRequest,
+    OverviewAnalyticsResponse,
+    OverviewRequest,
     RetentionAnalyticsResponse,
     RetentionRequest,
 )
@@ -73,17 +78,61 @@ def dataset_metadata(database: DatabaseService = Depends(database_service)) -> d
 
 
 @router.get("/catalog")
-def catalog() -> dict[str, object]:
-    return registry.public_catalog()
+def catalog(database: DatabaseService = Depends(database_service)) -> dict[str, object]:
+    try:
+        metadata = database.dataset_metadata()
+        raw_counts = metadata.get("row_counts")
+        counts = {str(key): int(value) for key, value in raw_counts.items()} if isinstance(raw_counts, dict) else None
+    except DatabaseUnavailable:
+        counts = None
+    return registry.public_catalog_with_counts(counts)
 
 
 @router.post("/analytics/kpi")
 @router.post("/analytics/compare")
 @router.post("/analytics/segment")
-@router.post("/analytics/feature-adoption")
 def metric_analysis(request: AnalyticsRequest, service: AnalyticsService = Depends(analytics_service)) -> dict[str, object]:
     try:
         return service.metric(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/analytics/feature-adoption", response_model=FeatureAdoptionAnalyticsResponse)
+def feature_adoption_analysis(
+    request: AnalyticsRequest,
+    service: AnalyticsService = Depends(analytics_service),
+) -> FeatureAdoptionAnalyticsResponse:
+    try:
+        return FeatureAdoptionAnalyticsResponse.model_validate(service.feature_adoption(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/analytics/acquisition", response_model=AcquisitionAnalyticsResponse)
+def acquisition_analysis(
+    request: AcquisitionRequest,
+    service: AnalyticsService = Depends(analytics_service),
+) -> AcquisitionAnalyticsResponse:
+    try:
+        return AcquisitionAnalyticsResponse.model_validate(service.acquisition(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/analytics/overview", response_model=OverviewAnalyticsResponse)
+def overview_analysis(
+    request: OverviewRequest,
+    service: AnalyticsService = Depends(analytics_service),
+) -> OverviewAnalyticsResponse:
+    try:
+        return OverviewAnalyticsResponse.model_validate(service.overview(request))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DatabaseUnavailable as exc:

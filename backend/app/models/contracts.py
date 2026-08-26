@@ -170,6 +170,9 @@ class AnalysisMetadata(BaseModel):
     provider: str
     confidence: Literal["high", "medium", "low"]
     timings: Timings
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class AnalysisResponse(BaseModel):
@@ -232,9 +235,70 @@ class AnalyticsRequest(BaseModel):
     filters: list[Filter] = Field(default_factory=list)
 
 
+class AcquisitionRequest(BaseModel):
+    period: str = "last_30_days"
+    comparison: str | None = None
+    dimension: str = "channel"
+    filters: list[Filter] = Field(default_factory=list)
+
+
+class AcquisitionSegment(BaseModel):
+    segment: str
+    visitors: float
+    signups: float
+    activated_users: float
+    paid_users: float
+    signup_conversion: float
+    activation_conversion: float
+    paid_conversion: float
+
+
+class AcquisitionAnalyticsResponse(BaseModel):
+    type: Literal["acquisition_analysis"] = "acquisition_analysis"
+    period: DateRange
+    comparison_period: DateRange | None = None
+    dataset_as_of: date
+    dimension: str
+    segments: list[AcquisitionSegment]
+    sql: SQLTransparency
+    execution_ms: float
+    previous_segments: list[AcquisitionSegment] = Field(default_factory=list)
+
+
+class OverviewRequest(BaseModel):
+    period: str = "last_30_days"
+
+
+class FeatureAdoptionRow(BaseModel):
+    feature: str
+    eligible_users: float
+    adopting_users: float
+    adoption_rate: float
+    total_uses: float
+    uses_per_adopter: float
+    feature_user_d30: float | None = None
+    non_feature_user_d30: float | None = None
+    feature_d30_sample_size: int = 0
+    non_feature_d30_sample_size: int = 0
+    association_delta: float | None = None
+
+
+class FeatureAdoptionAnalyticsResponse(BaseModel):
+    type: Literal["feature_adoption_analysis"] = "feature_adoption_analysis"
+    period: DateRange
+    comparison_period: DateRange | None = None
+    dataset_as_of: date
+    dimension: str | None
+    rows: list[FeatureAdoptionRow]
+    sql: SQLTransparency
+    execution_ms: float
+    previous_rows: list[FeatureAdoptionRow] = Field(default_factory=list)
+
+
 class FunnelRequest(BaseModel):
     funnel: Literal["acquisition", "onboarding", "checkout"] = "checkout"
     period: str = "last_30_days"
+    comparison: str | None = None
     dimension: str | None = None
     filters: list[Filter] = Field(default_factory=list)
 
@@ -291,3 +355,16 @@ class RetentionAnalyticsResponse(BaseModel):
     time_series: RetentionTimeSeries
     sql: RetentionSQLTransparency
     execution_ms: float
+
+
+class OverviewAnalyticsResponse(BaseModel):
+    type: Literal["overview_analysis"] = "overview_analysis"
+    period: DateRange
+    comparison_period: DateRange | None = None
+    dataset_as_of: date
+    kpis: dict[str, dict[str, Any]]
+    revenue_trend: dict[str, Any]
+    user_growth_trend: dict[str, Any]
+    acquisition: AcquisitionAnalyticsResponse
+    activation_funnel: dict[str, Any]
+    retention_snapshot: RetentionAnalyticsResponse

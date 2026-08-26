@@ -1,6 +1,12 @@
 {
-  "total": 50,
-  "passed": 50,
+  "total": 58,
+  "passed": 58,
+  "planner_passed": 58,
+  "tables_checked": 51,
+  "tables_passed": 51,
+  "chart_checked": 9,
+  "chart_passed": 9,
+  "numeric_status": "not_run_offline",
   "results": [
     {
       "question": "What was revenue last month?",
@@ -18,6 +24,12 @@
         "intent": "revenue",
         "metric": "revenue",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -38,6 +50,12 @@
         "metric": "checkout_conversion",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -45,21 +63,28 @@
       "expected": {
         "question": "Which acquisition channel converts best?",
         "intent": "ranking",
-        "metric": "signup_conversion",
+        "metric": "channel_conversion",
         "dimensions": [
           "channel"
         ],
         "tables": [
           "events",
           "sessions"
-        ]
+        ],
+        "chart_type": "bar"
       },
       "actual": {
         "intent": "ranking",
-        "metric": "signup_conversion",
+        "metric": "channel_conversion",
         "dimensions": [
           "channel"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -84,6 +109,12 @@
           "plan"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -101,6 +132,12 @@
         "intent": "funnel",
         "metric": "activation_rate",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -120,6 +157,12 @@
         "intent": "retention",
         "metric": "d30_retention",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -144,6 +187,12 @@
           "cohort"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -167,6 +216,12 @@
           "feature"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -189,6 +244,12 @@
         "dimensions": [
           "device"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -219,6 +280,12 @@
           "channel"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -230,7 +297,10 @@
         "dimensions": [
           "plan",
           "channel",
-          "company_size"
+          "company_size",
+          "customer_type",
+          "revenue_motion",
+          "failure_reason"
         ],
         "tables": [
           "transactions",
@@ -243,8 +313,17 @@
         "dimensions": [
           "plan",
           "channel",
-          "company_size"
+          "company_size",
+          "customer_type",
+          "revenue_motion",
+          "failure_reason"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -264,6 +343,12 @@
         "metric": "mrr",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -281,6 +366,12 @@
         "intent": "kpi",
         "metric": "mau",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -300,6 +391,12 @@
         "metric": "dau",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -317,6 +414,12 @@
         "intent": "kpi",
         "metric": "stickiness",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -341,6 +444,12 @@
           "channel"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -363,6 +472,12 @@
         "dimensions": [
           "browser"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -387,6 +502,12 @@
           "device"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -409,6 +530,12 @@
         "dimensions": [
           "country"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -433,6 +560,12 @@
           "plan"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -450,6 +583,12 @@
         "intent": "revenue",
         "metric": "churn_rate",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -469,6 +608,12 @@
         "metric": "trial_to_paid",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -487,6 +632,12 @@
         "metric": "arr",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -504,6 +655,12 @@
         "intent": "revenue",
         "metric": "arpu",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -524,6 +681,12 @@
         "metric": "d1_retention",
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -542,6 +705,12 @@
         "intent": "retention",
         "metric": "d7_retention",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -566,6 +735,12 @@
           "channel"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -588,6 +763,12 @@
         "dimensions": [
           "plan"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -612,6 +793,12 @@
           "campaign"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -635,6 +822,12 @@
           "country"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -652,6 +845,12 @@
         "intent": "comparison",
         "metric": "revenue",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -682,6 +881,12 @@
           "channel"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -705,6 +910,12 @@
           "company_size"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -722,6 +933,12 @@
         "intent": "feature_adoption",
         "metric": "feature_adoption",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -745,6 +962,12 @@
           "feature"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -760,6 +983,12 @@
         "intent": "ambiguous",
         "metric": null,
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
       },
       "passed": true
     },
@@ -777,6 +1006,12 @@
         "metric": null,
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
+      },
       "passed": true
     },
     {
@@ -792,6 +1027,12 @@
         "intent": "unsafe",
         "metric": null,
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
       },
       "passed": true
     },
@@ -809,6 +1050,12 @@
         "metric": null,
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
+      },
       "passed": true
     },
     {
@@ -824,6 +1071,12 @@
         "intent": "unsafe",
         "metric": null,
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
       },
       "passed": true
     },
@@ -841,6 +1094,12 @@
         "metric": null,
         "dimensions": []
       },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
+      },
       "passed": true
     },
     {
@@ -856,6 +1115,12 @@
         "intent": "unsafe",
         "metric": null,
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": null,
+        "chart": null,
+        "numeric": "not_applicable"
       },
       "passed": true
     },
@@ -880,6 +1145,12 @@
           "device"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -903,6 +1174,12 @@
           "browser"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -925,6 +1202,12 @@
         "dimensions": [
           "channel"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -953,6 +1236,12 @@
           "company_size"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -975,6 +1264,12 @@
         "dimensions": [
           "country"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -999,6 +1294,12 @@
           "company_size"
         ]
       },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
       "passed": true
     },
     {
@@ -1016,6 +1317,12 @@
         "intent": "kpi",
         "metric": "wau",
         "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
       },
       "passed": true
     },
@@ -1039,6 +1346,230 @@
         "dimensions": [
           "device"
         ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": null,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "Show weekly retention",
+      "expected": {
+        "question": "Show weekly retention",
+        "intent": "retention",
+        "metric": "weekly_retention",
+        "dimensions": [],
+        "tables": [
+          "users",
+          "events"
+        ],
+        "chart_type": "heatmap"
+      },
+      "actual": {
+        "intent": "retention",
+        "metric": "weekly_retention",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "Show monthly retention",
+      "expected": {
+        "question": "Show monthly retention",
+        "intent": "retention",
+        "metric": "monthly_retention",
+        "dimensions": [],
+        "tables": [
+          "users",
+          "events"
+        ],
+        "chart_type": "heatmap"
+      },
+      "actual": {
+        "intent": "retention",
+        "metric": "monthly_retention",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "How many visitors did we have last week?",
+      "expected": {
+        "question": "How many visitors did we have last week?",
+        "intent": "kpi",
+        "metric": "visitors",
+        "dimensions": [],
+        "tables": [
+          "events",
+          "sessions"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "kpi",
+        "metric": "visitors",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "How many signups did we have last week?",
+      "expected": {
+        "question": "How many signups did we have last week?",
+        "intent": "kpi",
+        "metric": "signups",
+        "dimensions": [],
+        "tables": [
+          "events",
+          "users"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "kpi",
+        "metric": "signups",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "How many activated users did we have last week?",
+      "expected": {
+        "question": "How many activated users did we have last week?",
+        "intent": "kpi",
+        "metric": "activated_users",
+        "dimensions": [],
+        "tables": [
+          "events",
+          "users"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "kpi",
+        "metric": "activated_users",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "How many paid users did we have last week?",
+      "expected": {
+        "question": "How many paid users did we have last week?",
+        "intent": "kpi",
+        "metric": "paid_users",
+        "dimensions": [],
+        "tables": [
+          "users",
+          "sessions",
+          "subscriptions",
+          "transactions"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "kpi",
+        "metric": "paid_users",
+        "dimensions": []
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "Show channel conversion by campaign",
+      "expected": {
+        "question": "Show channel conversion by campaign",
+        "intent": "segmentation",
+        "metric": "channel_conversion",
+        "dimensions": [
+          "campaign"
+        ],
+        "tables": [
+          "events",
+          "users"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "segmentation",
+        "metric": "channel_conversion",
+        "dimensions": [
+          "campaign"
+        ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
+      },
+      "passed": true
+    },
+    {
+      "question": "How does feature adoption differ by channel?",
+      "expected": {
+        "question": "How does feature adoption differ by channel?",
+        "intent": "segmentation",
+        "metric": "feature_adoption",
+        "dimensions": [
+          "channel"
+        ],
+        "tables": [
+          "events",
+          "users"
+        ],
+        "chart_type": "bar"
+      },
+      "actual": {
+        "intent": "segmentation",
+        "metric": "feature_adoption",
+        "dimensions": [
+          "channel"
+        ]
+      },
+      "checks": {
+        "planner": true,
+        "tables": true,
+        "chart": true,
+        "numeric": "not_run_offline"
       },
       "passed": true
     }

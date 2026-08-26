@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from app.ai.insights import GroundedInsight, InsightService
@@ -117,7 +117,7 @@ class CopilotPipeline:
             )
 
         definition = registry.metric(plan.metric)
-        current_proposal = compile_metric(plan.metric, plan.time_range)
+        current_proposal = compile_metric(plan.metric, plan.time_range, filters=plan.filters)
         current_validation = self.validator.validate(current_proposal.query)
         if not current_validation.valid:
             self._safe_audit(query_id, session_hash, request.question, current_proposal.query, current_validation, None, None, None, "SQL_VALIDATION_FAILED")
@@ -129,7 +129,9 @@ class CopilotPipeline:
             previous_sql = ""
             previous_ms = 0.0
             if plan.comparison:
-                previous_rows, previous_sql, previous_ms = self.analytics.execute(compile_metric(plan.metric, plan.comparison))
+                previous_rows, previous_sql, previous_ms = self.analytics.execute(
+                    compile_metric(plan.metric, plan.comparison, filters=plan.filters)
+                )
         except (DatabaseUnavailable, ValueError):
             self._safe_audit(query_id, session_hash, request.question, current_proposal.query, current_validation, "failed", None, None, "QUERY_EXECUTION_FAILED")
             return ErrorResponse(code="QUERY_EXECUTION_FAILED", message="The validated analysis could not be completed.", retryable=True, query_id=str(query_id))
@@ -150,35 +152,42 @@ class CopilotPipeline:
         evidence = [self._comparison_evidence(definition.label, comparison)]
         drivers: list[Driver] = []
         driver_rows: list[dict[str, Any]] = []
-        dimension_limit = 4 if request.mode.value == "deep" else 1
+        dimension_limit = 6 if request.mode.value == "deep" else 1
         for dimension in plan.dimensions[:dimension_limit]:
             if not plan.comparison:
                 break
             try:
-                cur_segments, _, seg_current_ms = self.analytics.execute(compile_metric(plan.metric, plan.time_range, dimension))
-                prev_segments, _, seg_previous_ms = self.analytics.execute(compile_metric(plan.metric, plan.comparison, dimension))
+                cur_segments, _, seg_current_ms = self.analytics.execute(
+                    compile_metric(plan.metric, plan.time_range, dimension, plan.filters)
+                )
+                prev_segments, _, seg_previous_ms = self.analytics.execute(
+                    compile_metric(plan.metric, plan.comparison, dimension, plan.filters)
+                )
                 current_ms += seg_current_ms
                 previous_ms += seg_previous_ms
-                new_drivers, new_evidence = self._drivers(definition.kind, dimension, cur_segments, prev_segments, comparison)
+                new_drivers, new_evidence = self._drivers(
+                    definition.kind,
+                    dimension,
+                    cur_segments,
+                    prev_segments,
+                    comparison,
+                    definition.format,
+                )
                 drivers.extend(new_drivers[:5])
                 evidence.extend(new_evidence)
                 if not driver_rows:
                     driver_rows = cur_segments
             except (ValueError, DatabaseUnavailable):
                 continue
-        drivers.sort(key=lambda item: abs(item.contribution), reverse=True)
+        drivers.sort(key=lambda item: (abs(item.contribution), item.sample_size), reverse=True)
         primary_driver = drivers[0] if drivers else None
-        confidence = confidence_level(
-            comparison.current.denominator,
-            comparison.previous.denominator if comparison.previous else None,
-            primary_driver.share_of_change if primary_driver else None,
-        )
         deterministic = self._deterministic_insight(
             request.question,
             definition.label,
             comparison,
             evidence,
             primary_driver,
+            diagnostic=plan.intent == Intent.DIAGNOSTIC,
         )
         interpretation_started = time.perf_counter()
         narrative, provider, grounded = self.insights.interpret(
@@ -187,8 +196,25 @@ class CopilotPipeline:
             evidence=evidence,
             deterministic=deterministic,
         )
+        if plan.intent == Intent.DIAGNOSTIC:
+            narrative = self._ensure_diagnostic_findings(narrative, evidence)
+        # Grounding is part of the confidence contract: a large sample cannot
+        # produce a high-confidence answer when the model narrative failed its
+        # evidence-ID/numeric grounding checks.
+        confidence = confidence_level(
+            comparison.current.denominator,
+            comparison.previous.denominator if comparison.previous else None,
+            primary_driver.share_of_change if primary_driver else None,
+            grounded=grounded,
+        )
         interpretation_ms = (time.perf_counter() - interpretation_started) * 1000
-        chart = self._chart(definition.label, comparison, driver_rows, plan.dimensions[0] if plan.dimensions else None)
+        chart = self._chart(
+            definition.label,
+            comparison,
+            driver_rows,
+            plan.dimensions[0] if plan.dimensions else None,
+            plan.intent,
+        )
         total_ms = (time.perf_counter() - started) * 1000
         timings = Timings(
             total_ms=total_ms,
@@ -237,9 +263,26 @@ class CopilotPipeline:
                 provider=provider,
                 confidence=confidence,
                 timings=timings,
+                model=self.insights.last_usage.model if self.insights.last_usage else None,
+                input_tokens=self.insights.last_usage.input_tokens if self.insights.last_usage else None,
+                output_tokens=self.insights.last_usage.output_tokens if self.insights.last_usage else None,
             ),
         )
-        self._safe_audit(query_id, session_hash, request.question, current_sql, current_validation, "success", current_ms + previous_ms, result.sql.row_count, None)
+        self._safe_audit(
+            query_id,
+            session_hash,
+            request.question,
+            current_sql,
+            current_validation,
+            "success",
+            current_ms + previous_ms,
+            result.sql.row_count,
+            None,
+            provider=provider,
+            model=self.insights.last_usage.model if self.insights.last_usage else None,
+            input_tokens=self.insights.last_usage.input_tokens if self.insights.last_usage else None,
+            output_tokens=self.insights.last_usage.output_tokens if self.insights.last_usage else None,
+        )
         self._safe_history(query_id, session_hash, request, result)
         return result
 
@@ -373,6 +416,10 @@ class CopilotPipeline:
             execution_ms,
             len(rows),
             None,
+            provider=generated.provider,
+            model=generated.usage.model if generated.usage else None,
+            input_tokens=generated.usage.input_tokens if generated.usage else None,
+            output_tokens=generated.usage.output_tokens if generated.usage else None,
         )
         self._safe_history(query_id, session_hash, request, result)
         return result
@@ -395,6 +442,10 @@ class CopilotPipeline:
                 None,
                 None,
                 "SQL_GENERATED",
+                provider=generated.provider,
+                model=generated.usage.model if generated.usage else None,
+                input_tokens=generated.usage.input_tokens if generated.usage else None,
+                output_tokens=generated.usage.output_tokens if generated.usage else None,
             )
         if generated.repaired:
             self._safe_audit(
@@ -407,6 +458,10 @@ class CopilotPipeline:
                 None,
                 None,
                 "SQL_REPAIR_ATTEMPT",
+                provider=generated.provider,
+                model=generated.usage.model if generated.usage else None,
+                input_tokens=generated.usage.input_tokens if generated.usage else None,
+                output_tokens=generated.usage.output_tokens if generated.usage else None,
             )
 
     def _ad_hoc_response(
@@ -529,6 +584,9 @@ class CopilotPipeline:
                     analysis_ms=max(0, total_ms - planner_ms - sql_ms - execution_ms),
                     interpretation_ms=0,
                 ),
+                model=generated.usage.model if generated.usage else None,
+                input_tokens=generated.usage.input_tokens if generated.usage else None,
+                output_tokens=generated.usage.output_tokens if generated.usage else None,
             ),
         )
 
@@ -556,19 +614,35 @@ class CopilotPipeline:
         return Evidence(id="metric-change", label=label, value=comparison.current.formatted, detail=detail)
 
     @staticmethod
-    def _drivers(kind: str, dimension: str, current: list[dict[str, Any]], previous: list[dict[str, Any]], comparison: ComparisonResult) -> tuple[list[Driver], list[Evidence]]:
-        if kind == "additive":
+    def _drivers(
+        kind: str,
+        dimension: str,
+        current: list[dict[str, Any]],
+        previous: list[dict[str, Any]],
+        comparison: ComparisonResult,
+        format_name: str = "currency",
+    ) -> tuple[list[Driver], list[Evidence]]:
+        if kind in {"additive", "count"}:
             return additive_contributions(
                 dimension,
                 {str(row["segment"]): float(row.get("value") or 0) for row in current},
                 {str(row["segment"]): float(row.get("value") or 0) for row in previous},
+                format_name,
             )
         current_rates = [SegmentRate(str(row["segment"]), float(row.get("numerator") or 0), float(row.get("denominator") or 0)) for row in current]
         previous_rates = [SegmentRate(str(row["segment"]), float(row.get("numerator") or 0), float(row.get("denominator") or 0)) for row in previous]
         return rate_contributions(dimension, current_rates, previous_rates, float(comparison.absolute_delta or 0))
 
     @staticmethod
-    def _deterministic_insight(question: str, label: str, comparison: ComparisonResult, evidence: list[Evidence], driver: Driver | None) -> GroundedInsight:
+    def _deterministic_insight(
+        question: str,
+        label: str,
+        comparison: ComparisonResult,
+        evidence: list[Evidence],
+        driver: Driver | None,
+        *,
+        diagnostic: bool = False,
+    ) -> GroundedInsight:
         if comparison.previous:
             relative = (comparison.relative_delta or 0) * 100
             direction = "increased" if (comparison.absolute_delta or 0) >= 0 else "decreased"
@@ -588,6 +662,14 @@ class CopilotPipeline:
             recommendations.append(Recommendation(priority="high", action=f"Investigate the {driver.segment} {driver.dimension} segment first", expected_impact="Addresses the largest measured contributor before broader changes", evidence_ids=driver.evidence_ids, how_to_validate="Compare event errors, payment failure reasons, and session behavior before and after the change"))
         else:
             recommendations.append(Recommendation(priority="medium", action="Continue monitoring the governed metric", expected_impact="Confirms whether the observed level persists", evidence_ids=["metric-change"], how_to_validate="Re-run the same comparison after the next complete period"))
+            if diagnostic:
+                findings.extend(
+                    [
+                        Finding(kind="likely_driver", text="No single segment met the supported dominance threshold; the change is distributed across the inspected dimensions.", evidence_ids=["metric-change"]),
+                        Finding(kind="hypothesis", text="The distributed pattern may reflect a mix of smaller product or payment issues, but observational data cannot establish causation.", evidence_ids=["metric-change"]),
+                        Finding(kind="recommended_investigation", text="Inspect the highest-volume segments and failure details around the first day of the change.", evidence_ids=["metric-change"]),
+                    ]
+                )
         return GroundedInsight(
             headline=headline,
             summary=summary,
@@ -598,27 +680,102 @@ class CopilotPipeline:
         )
 
     @staticmethod
-    def _chart(label: str, comparison: ComparisonResult, segment_rows: list[dict[str, Any]], dimension: str | None) -> ChartSpec:
+    def _ensure_diagnostic_findings(narrative: GroundedInsight, evidence: list[Evidence]) -> GroundedInsight:
+        """Ensure every diagnostic response exposes the four decision-safe finding kinds."""
+
+        present = {finding.kind for finding in narrative.findings}
+        fallback_evidence = [evidence[0].id] if evidence else []
+        missing: dict[Literal["observed", "likely_driver", "hypothesis", "recommended_investigation"], str] = {
+            "observed": "The resolved metric and comparison are the observed result.",
+            "likely_driver": "No additional dominant driver was supported by the available evidence.",
+            "hypothesis": "The observed pattern is a hypothesis for investigation, not a causal conclusion.",
+            "recommended_investigation": "Inspect the highest-volume segments and relevant event or payment details next.",
+        }
+        additions = [
+            Finding(kind=kind, text=text, evidence_ids=fallback_evidence)
+            for kind, text in missing.items()
+            if kind not in present
+        ]
+        if not additions:
+            return narrative
+        return narrative.model_copy(update={"findings": [*narrative.findings, *additions]})
+
+    @staticmethod
+    def _chart(
+        label: str,
+        comparison: ComparisonResult,
+        segment_rows: list[dict[str, Any]],
+        dimension: str | None,
+        intent: Intent | None = None,
+    ) -> ChartSpec:
         if segment_rows:
             data = [{"segment": str(row["segment"]), "value": float(row.get("value") or 0)} for row in segment_rows]
             return ChartSpec(chart_type="bar", title=f"{label} by {dimension}", x="segment", y="value", data=data, description=f"Bar chart comparing {label.lower()} across {dimension} segments.")
         data = [{"period": comparison.current.label, "value": comparison.current.value}]
         if comparison.previous:
             data.insert(0, {"period": comparison.previous.label, "value": comparison.previous.value})
-        return ChartSpec(chart_type="bar", title=f"{label} period comparison", x="period", y="value", data=data, description=f"Bar chart comparing {label.lower()} across the resolved periods.")
+        chart_type = "line" if intent in {Intent.TREND, Intent.COMPARISON} else "bar"
+        description = (
+            f"Line chart showing {label.lower()} across the resolved periods."
+            if chart_type == "line"
+            else f"Bar chart comparing {label.lower()} across the resolved periods."
+        )
+        return ChartSpec(
+            chart_type=chart_type,
+            title=f"{label} period comparison",
+            x="period",
+            y="value",
+            data=data,
+            description=description,
+        )
 
     @staticmethod
     def _trace(dimensions: list[str], has_drivers: bool) -> list[str]:
         steps = ["Resolved the governed metric and date range", "Generated and AST-validated read-only SQL", "Calculated the metric deterministically"]
-        steps.extend(f"Compared {dimension} segments" for dimension in dimensions)
+        labels = {
+            "failure_reason": "Checked payment failure reasons",
+            "revenue_motion": "Compared charges, renewals, and refunds",
+            "customer_type": "Compared new and returning customers",
+        }
+        steps.extend(labels.get(dimension, f"Compared {dimension} segments") for dimension in dimensions)
         if has_drivers:
             steps.append("Ranked contribution to the total change")
         steps.extend(["Bound conclusions to evidence", "Prepared recommended next investigations"])
         return steps
 
-    def _safe_audit(self, query_id: UUID, session_hash: str, question: str, sql: str | None, validation: Any, status: str | None, elapsed: float | None, rows: int | None, error: str | None) -> None:
+    def _safe_audit(
+        self,
+        query_id: UUID,
+        session_hash: str,
+        question: str,
+        sql: str | None,
+        validation: Any,
+        status: str | None,
+        elapsed: float | None,
+        rows: int | None,
+        error: str | None,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
         try:
-            self.database.audit(query_id=query_id, session_hash=session_hash, question=question, generated_sql=sql, validation=validation, execution_status=status, execution_ms=elapsed, row_count=rows, error_code=error)
+            self.database.audit(
+                query_id=query_id,
+                session_hash=session_hash,
+                question=question,
+                generated_sql=sql,
+                validation=validation,
+                execution_status=status,
+                execution_ms=elapsed,
+                row_count=rows,
+                error_code=error,
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
         except Exception:
             pass
 

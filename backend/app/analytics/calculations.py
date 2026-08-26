@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 from app.models.contracts import ComparisonResult, Driver, Evidence, MetricPoint
 
@@ -111,7 +112,16 @@ def rate_contributions(
                 evidence_ids=[evidence_id],
             )
         )
-    drivers.sort(key=lambda item: abs(item.contribution), reverse=True)
+    # Contribution is the primary ranking signal; deterministic support and
+    # segment coverage break ties without mixing dimensions together.
+    drivers.sort(
+        key=lambda item: (
+            abs(item.contribution),
+            item.sample_size,
+            abs(item.contribution) / max(current_total, previous_total, 1),
+        ),
+        reverse=True,
+    )
     return drivers, evidence
 
 
@@ -119,16 +129,26 @@ def additive_contributions(
     dimension: str,
     current: dict[str, float],
     previous: dict[str, float],
+    format_name: str = "currency",
 ) -> tuple[list[Driver], list[Evidence]]:
     total_change = sum(current.values()) - sum(previous.values())
     drivers: list[Driver] = []
     evidence: list[Evidence] = []
+    def value_format(value: float) -> str:
+        return format_value(value, format_name)
     for index, segment in enumerate(sorted(current.keys() | previous.keys())):
         cur = current.get(segment, 0.0)
         prev = previous.get(segment, 0.0)
         contribution = cur - prev
         evidence_id = f"driver-{dimension}-{index + 1}"
-        evidence.append(Evidence(id=evidence_id, label=f"{segment} {dimension}", value=f"${prev:,.0f} → ${cur:,.0f}", detail=f"Contribution ${contribution:,.0f}"))
+        evidence.append(
+            Evidence(
+                id=evidence_id,
+                label=f"{segment} {dimension}",
+                value=f"{value_format(prev)} → {value_format(cur)}",
+                detail=f"Contribution {value_format(contribution)}",
+            )
+        )
         drivers.append(
             Driver(
                 dimension=dimension,
@@ -137,7 +157,7 @@ def additive_contributions(
                 previous_value=prev,
                 contribution=contribution,
                 share_of_change=contribution / total_change if total_change else None,
-                sample_size=0,
+                sample_size=int(cur),
                 evidence_ids=[evidence_id],
             )
         )
@@ -151,7 +171,7 @@ def confidence_level(
     top_driver_share: float | None,
     ambiguous: bool = False,
     grounded: bool = True,
-) -> str:
+) -> Literal["high", "medium", "low"]:
     minimum = min(current_sample or 0, previous_sample or 0)
     dominance = abs(top_driver_share or 0)
     if ambiguous or not grounded or minimum < 100:
@@ -163,4 +183,3 @@ def confidence_level(
 
 def finite(value: float | None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
-

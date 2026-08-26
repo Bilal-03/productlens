@@ -4,16 +4,33 @@ import hashlib
 import json
 from typing import Any
 
-from app.analytics.sql_compiler import compile_funnel, compile_metric, compile_retention_curve
+from app.analytics.sql_compiler import (
+    compile_acquisition,
+    compile_funnel,
+    compile_metric,
+    compile_retention_curve,
+)
 from app.analytics.time_ranges import DATASET_AS_OF, default_comparison, resolve_period
 from app.database.service import DatabaseService
 from app.models.contracts import (
+    AcquisitionAnalyticsResponse,
+    AcquisitionRequest,
+    AcquisitionSegment,
     AnalyticsRequest,
+    FeatureAdoptionAnalyticsResponse,
+    FeatureAdoptionRow,
     FunnelRequest,
+    OverviewAnalyticsResponse,
+    OverviewRequest,
     RetentionAnalyticsResponse,
+    RetentionHeatmap,
     RetentionRequest,
+    RetentionSQLTransparency,
+    RetentionTimeSeries,
+    RetentionTimeSeriesPoint,
     RetentionWindow,
     SQLProposal,
+    SQLTransparency,
 )
 from app.security.sql_validator import SQLValidator
 from app.semantic.registry import registry
@@ -32,6 +49,8 @@ class AnalyticsService:
         return rows, validation.normalized_query or proposal.query, elapsed
 
     def metric(self, request: AnalyticsRequest) -> dict[str, Any]:
+        if request.metric == "feature_adoption":
+            return self.feature_adoption(request)
         cache_key = self._cache_key("metric", request.model_dump(mode="json"))
         dataset_version = self.database.dataset_version()
         if dataset_version:
@@ -65,6 +84,186 @@ class AnalyticsService:
             self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
         return payload
 
+    def acquisition(self, request: AcquisitionRequest) -> dict[str, Any]:
+        cache_key = self._cache_key("acquisition", request.model_dump(mode="json"))
+        dataset_version = self.database.dataset_version()
+        if dataset_version:
+            cached = self.database.cache_get(cache_key, dataset_version)
+            if cached is not None:
+                return cached
+        period = resolve_period(request.period)
+        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        current_proposal = compile_acquisition(period, request.dimension, request.filters)
+        current_rows, current_sql, current_ms = self.execute(current_proposal)
+        previous_rows: list[dict[str, Any]] = []
+        previous_sql = ""
+        previous_ms = 0.0
+        if comparison_period:
+            previous_rows, previous_sql, previous_ms = self.execute(
+                compile_acquisition(comparison_period, request.dimension, request.filters)
+            )
+
+        def normalize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                visitors = float(row.get("visitors") or 0)
+                signups = float(row.get("signups") or 0)
+                activated = float(row.get("activated_users") or 0)
+                paid = float(row.get("paid_users") or 0)
+                result.append(
+                    AcquisitionSegment(
+                        segment=str(row.get("segment") or "Unknown"),
+                        visitors=visitors,
+                        signups=signups,
+                        activated_users=activated,
+                        paid_users=paid,
+                        signup_conversion=signups / visitors if visitors else 0,
+                        activation_conversion=activated / signups if signups else 0,
+                        paid_conversion=paid / signups if signups else 0,
+                    ).model_dump(mode="json")
+                )
+            return result
+
+        current_segments = normalize(current_rows)
+        previous_segments = normalize(previous_rows)
+        validation = self.validator.validate(current_proposal.query)
+        payload = AcquisitionAnalyticsResponse(
+            period=period,
+            comparison_period=comparison_period,
+            dataset_as_of=DATASET_AS_OF,
+            dimension=request.dimension,
+            segments=[AcquisitionSegment.model_validate(item) for item in current_segments],
+            sql=SQLTransparency(
+                query=current_sql + (f"\n\n-- Comparison\n{previous_sql}" if previous_sql else ""),
+                purpose=current_proposal.purpose,
+                tables=validation.tables,
+                metrics=["visitors", "signups", "activated_users", "paid_users", "channel_conversion"],
+                validated=True,
+                row_count=len(current_rows) + len(previous_rows),
+            ),
+            execution_ms=current_ms + previous_ms,
+            previous_segments=[AcquisitionSegment.model_validate(item) for item in previous_segments],
+        ).model_dump(mode="json")
+        if dataset_version:
+            self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
+        return payload
+
+    def feature_adoption(self, request: AnalyticsRequest) -> dict[str, Any]:
+        if request.metric != "feature_adoption":
+            raise ValueError("The feature-adoption endpoint requires the feature_adoption metric")
+        cache_key = self._cache_key("feature_adoption", request.model_dump(mode="json"))
+        dataset_version = self.database.dataset_version()
+        if dataset_version:
+            cached = self.database.cache_get(cache_key, dataset_version)
+            if cached is not None:
+                return cached
+        period = resolve_period(request.period)
+        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
+        current_proposal = compile_metric("feature_adoption", period, request.dimension or "feature", request.filters)
+        current_rows, current_sql, current_ms = self.execute(current_proposal)
+        previous_rows: list[dict[str, Any]] = []
+        previous_sql = ""
+        previous_ms = 0.0
+        if comparison_period:
+            previous_rows, previous_sql, previous_ms = self.execute(
+                compile_metric("feature_adoption", comparison_period, request.dimension or "feature", request.filters)
+            )
+
+        def normalize(rows: list[dict[str, Any]]) -> list[FeatureAdoptionRow]:
+            result: list[FeatureAdoptionRow] = []
+            for row in rows:
+                feature_user_d30_denominator = float(row.get("feature_d30_denominator") or 0)
+                non_feature_d30_denominator = float(row.get("non_feature_d30_denominator") or 0)
+                feature_d30 = (
+                    float(row.get("feature_d30_numerator") or 0) / feature_user_d30_denominator
+                    if feature_user_d30_denominator
+                    else None
+                )
+                non_feature_d30 = (
+                    float(row.get("non_feature_d30_numerator") or 0) / non_feature_d30_denominator
+                    if non_feature_d30_denominator
+                    else None
+                )
+                result.append(
+                    FeatureAdoptionRow(
+                        feature=str(row.get("segment") or "Other"),
+                        eligible_users=float(row.get("eligible_users") or row.get("denominator") or 0),
+                        adopting_users=float(row.get("adopting_users") or row.get("numerator") or 0),
+                        adoption_rate=float(row.get("value") or 0),
+                        total_uses=float(row.get("total_uses") or 0),
+                        uses_per_adopter=float(row.get("uses_per_adopter") or 0),
+                        feature_user_d30=feature_d30,
+                        non_feature_user_d30=non_feature_d30,
+                        feature_d30_sample_size=int(feature_user_d30_denominator),
+                        non_feature_d30_sample_size=int(non_feature_d30_denominator),
+                        association_delta=(feature_d30 - non_feature_d30) if feature_d30 is not None and non_feature_d30 is not None else None,
+                    )
+                )
+            return result
+
+        current = normalize(current_rows)
+        previous = normalize(previous_rows)
+        validation = self.validator.validate(current_proposal.query)
+        payload = FeatureAdoptionAnalyticsResponse(
+            period=period,
+            comparison_period=comparison_period,
+            dataset_as_of=DATASET_AS_OF,
+            dimension=request.dimension or "feature",
+            rows=current,
+            sql=SQLTransparency(
+                query=current_sql + (f"\n\n-- Comparison\n{previous_sql}" if previous_sql else ""),
+                purpose=current_proposal.purpose,
+                tables=validation.tables,
+                metrics=["feature_adoption", "d30_retention"],
+                validated=True,
+                row_count=len(current_rows) + len(previous_rows),
+            ),
+            execution_ms=current_ms + previous_ms,
+            previous_rows=previous,
+        ).model_dump(mode="json")
+        if dataset_version:
+            self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
+        return payload
+
+    def overview(self, request: OverviewRequest) -> dict[str, Any]:
+        cache_key = self._cache_key("overview", request.model_dump(mode="json"))
+        dataset_version = self.database.dataset_version()
+        if dataset_version:
+            cached = self.database.cache_get(cache_key, dataset_version)
+            if cached is not None:
+                return cached
+        period = resolve_period(request.period)
+        comparison_period = default_comparison(request.period)
+        kpi_period = request.period
+        kpi_names = ["mau", "activation_rate", "checkout_conversion", "mrr", "d30_retention", "churn_rate"]
+        kpis: dict[str, dict[str, Any]] = {}
+        for metric_name in kpi_names:
+            metric_period = "last_90_days" if metric_name == "d30_retention" else kpi_period
+            kpis[metric_name] = self.metric(AnalyticsRequest(metric=metric_name, period=metric_period))
+        acquisition = AcquisitionAnalyticsResponse.model_validate(
+            self.acquisition(AcquisitionRequest(period=kpi_period, dimension="channel"))
+        )
+        activation_funnel = self.funnel(FunnelRequest(funnel="onboarding", period=kpi_period))
+        retention_snapshot = RetentionAnalyticsResponse.model_validate(
+            self.retention(RetentionRequest(period="last_90_days", windows=[1, 7, 30]))
+        )
+        revenue_trend = self.trend(AnalyticsRequest(metric="revenue", period="last_90_days"))
+        user_growth_trend = self.trend(AnalyticsRequest(metric="signups", period="last_90_days"))
+        payload = OverviewAnalyticsResponse(
+            period=period,
+            comparison_period=comparison_period,
+            dataset_as_of=DATASET_AS_OF,
+            kpis=kpis,
+            revenue_trend=revenue_trend,
+            user_growth_trend=user_growth_trend,
+            acquisition=acquisition,
+            activation_funnel=activation_funnel,
+            retention_snapshot=retention_snapshot,
+        ).model_dump(mode="json")
+        if dataset_version:
+            self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
+        return payload
+
     def funnel(self, request: FunnelRequest) -> dict[str, Any]:
         cache_key = self._cache_key("funnel", request.model_dump(mode="json"))
         dataset_version = self.database.dataset_version()
@@ -73,22 +272,43 @@ class AnalyticsService:
             if cached is not None:
                 return cached
         period = resolve_period(request.period)
+        comparison_period = resolve_period(request.comparison) if request.comparison else default_comparison(request.period)
         rows, sql, elapsed = self.execute(
             compile_funnel(request.funnel, period, request.dimension, request.filters)
         )
-        by_segment: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            by_segment.setdefault(str(row["segment"]), []).append(row)
-        for stages in by_segment.values():
-            first = float(stages[0]["users"]) if stages else 0
-            previous = first
-            for stage in stages:
-                users = float(stage["users"])
-                stage["stage_conversion"] = users / previous if previous else 0
-                stage["overall_conversion"] = users / first if first else 0
-                stage["drop_off"] = previous - users
-                previous = users
-        payload = {"funnel": request.funnel, "period": period.model_dump(), "dataset_as_of": DATASET_AS_OF.isoformat(), "segments": by_segment, "sql": sql, "execution_ms": elapsed}
+        previous_rows: list[dict[str, Any]] = []
+        previous_sql = ""
+        if comparison_period:
+            previous_rows, previous_sql, previous_elapsed = self.execute(
+                compile_funnel(request.funnel, comparison_period, request.dimension, request.filters)
+            )
+            elapsed += previous_elapsed
+
+        def enrich(funnel_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+            by_segment: dict[str, list[dict[str, Any]]] = {}
+            for row in funnel_rows:
+                by_segment.setdefault(str(row["segment"]), []).append(row)
+            for stages in by_segment.values():
+                first = float(stages[0]["users"]) if stages else 0
+                previous = first
+                for stage in stages:
+                    users = float(stage["users"])
+                    stage["stage_conversion"] = users / previous if previous else 0
+                    stage["overall_conversion"] = users / first if first else 0
+                    stage["drop_off"] = previous - users
+                    previous = users
+            return by_segment
+
+        payload = {
+            "funnel": request.funnel,
+            "period": period.model_dump(),
+            "comparison_period": comparison_period.model_dump() if comparison_period else None,
+            "dataset_as_of": DATASET_AS_OF.isoformat(),
+            "segments": enrich(rows),
+            "previous_segments": enrich(previous_rows) if previous_rows else {},
+            "sql": sql + (f"\n\n-- Comparison\n{previous_sql}" if previous_sql else ""),
+            "execution_ms": elapsed,
+        }
         if dataset_version:
             self.database.cache_put(cache_key, dataset_version, payload, self.database.settings.result_cache_ttl_seconds)
         return payload
@@ -201,23 +421,23 @@ class AnalyticsService:
                 RetentionWindow(day=day, label=f"D{day} Retention", metric=f"d{day}_retention")
                 for day in windows
             ],
-            heatmap={
-                "x_labels": window_labels,
-                "y_labels": y_labels,
-                "matrix": matrix,
-                "cohort_sizes": cohort_sizes,
-            },
-            time_series={
-                "points": points,
-                "segments": sorted(segments),
-            },
-            sql={
-                "heatmap": heatmap_sql,
-                "trend": trend_sql,
-                "tables": heatmap_validation.tables,
-                "metrics": [f"d{day}_retention" for day in windows],
-                "validated": True,
-            },
+            heatmap=RetentionHeatmap(
+                x_labels=window_labels,
+                y_labels=y_labels,
+                matrix=matrix,
+                cohort_sizes=cohort_sizes,
+            ),
+            time_series=RetentionTimeSeries(
+                points=[RetentionTimeSeriesPoint.model_validate(point) for point in points],
+                segments=sorted(segments),
+            ),
+            sql=RetentionSQLTransparency(
+                heatmap=heatmap_sql,
+                trend=trend_sql,
+                tables=heatmap_validation.tables,
+                metrics=[f"d{day}_retention" for day in windows],
+                validated=True,
+            ),
             execution_ms=heatmap_ms + trend_ms,
         )
         payload = payload_model.model_dump(mode="json")

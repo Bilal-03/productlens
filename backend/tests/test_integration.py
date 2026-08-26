@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 
 pytestmark = [
@@ -98,3 +100,60 @@ def test_kpi_and_governed_copilot_execute_with_real_roles() -> None:
     assert copilot_payload["metadata"]["dataset_as_of"] == "2026-08-24"
     assert copilot_payload["sql"]["validated"] is True
     assert copilot_payload["sql"]["row_count"] > 0
+
+    reopened = client.get(
+        f"/api/v1/history/{copilot_payload['metadata']['query_id']}",
+        headers={"X-ProductLens-Session": SESSION_ID},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["metadata"]["query_id"] == copilot_payload["metadata"]["query_id"]
+
+
+def test_completion_analytics_routes_execute_with_real_roles() -> None:
+    acquisition = client.post(
+        "/api/v1/analytics/acquisition",
+        json={"period": "last_30_days", "dimension": "channel"},
+    )
+    assert acquisition.status_code == 200
+    acquisition_payload = acquisition.json()
+    assert acquisition_payload["type"] == "acquisition_analysis"
+    assert acquisition_payload["segments"]
+    assert {"visitors", "signups", "activated_users", "paid_users", "signup_conversion"}.issubset(
+        acquisition_payload["segments"][0]
+    )
+
+    feature = client.post(
+        "/api/v1/analytics/feature-adoption",
+        json={"metric": "feature_adoption", "period": "last_30_days", "dimension": "feature"},
+    )
+    assert feature.status_code == 200
+    feature_payload = feature.json()
+    assert feature_payload["type"] == "feature_adoption_analysis"
+    assert feature_payload["rows"]
+    assert {"eligible_users", "total_uses", "uses_per_adopter", "feature_d30_sample_size"}.issubset(
+        feature_payload["rows"][0]
+    )
+
+    overview = client.post("/api/v1/analytics/overview", json={"period": "last_30_days"})
+    assert overview.status_code == 200
+    overview_payload = overview.json()
+    assert overview_payload["type"] == "overview_analysis"
+    assert len(overview_payload["kpis"]) == 6
+    assert overview_payload["revenue_trend"]["points"]
+
+
+def test_analytics_reader_cannot_reach_source_or_operational_schemas() -> None:
+    url = get_settings().analytics_database_url.replace("postgresql+psycopg", "postgresql")
+    with psycopg.connect(url, autocommit=True) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM analytics.users")
+        assert cursor.fetchone()[0] == 800
+        for query in ("SELECT COUNT(*) FROM core.users", "SELECT COUNT(*) FROM operational.dataset_metadata"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cursor.execute(query)
+
+    app_url = get_settings().app_database_url.replace("postgresql+psycopg", "postgresql")
+    with psycopg.connect(app_url, autocommit=True) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM operational.dataset_metadata")
+        assert cursor.fetchone()[0] == 1
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            cursor.execute("SELECT COUNT(*) FROM analytics.users")

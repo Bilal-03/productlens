@@ -3,29 +3,85 @@ tables:
     description: Synthetic product users and acquisition attributes.
     primary_key: user_id
     columns: [user_id, signup_at, country, region, acquisition_channel, campaign, plan, company_size, signup_source]
+    allowed_dimensions: [channel, campaign, country, plan, company_size, cohort]
+    column_metadata:
+      user_id: {data_type: bigint, description: Compact synthetic user identity, sample_values: [1, 2, 3]}
+      signup_at: {data_type: timestamptz, description: UTC signup timestamp, sample_values: ["2026-08-01T12:00:00Z"]}
+      country: {data_type: text, description: Synthetic country, sample_values: [United States, India, United Kingdom]}
+      region: {data_type: text, description: Synthetic geographic region, sample_values: [North America, APAC, Europe]}
+      acquisition_channel: {data_type: text, description: First-touch acquisition channel, sample_values: [Paid Social, Organic Search, Direct]}
+      campaign: {data_type: text, description: Synthetic acquisition campaign, sample_values: [social-growth-26, organic-content]}
+      plan: {data_type: text, description: Current or acquired plan label, sample_values: [Free, Starter, Pro, Business]}
+      company_size: {data_type: text, description: Synthetic company-size segment, sample_values: [Solo, SMB, Mid-market, Enterprise]}
+      signup_source: {data_type: text, description: Signup source classification, sample_values: [web, referral, import]}
     pii_columns: []
   sessions:
     description: Product and acquisition sessions linked to users.
     primary_key: session_id
     foreign_keys: {user_id: users.user_id}
     columns: [session_id, user_id, started_at, ended_at, device, browser, operating_system, channel, campaign, landing_page]
+    allowed_dimensions: [device, browser, channel, campaign, country]
+    column_metadata:
+      session_id: {data_type: bigint, description: Compact synthetic session identity, sample_values: [1, 2, 3]}
+      user_id: {data_type: bigint, description: Foreign key to users, sample_values: [1, 2, 3]}
+      started_at: {data_type: timestamptz, description: UTC session start timestamp, sample_values: ["2026-08-01T12:00:00Z"]}
+      ended_at: {data_type: timestamptz, description: UTC session end timestamp, sample_values: ["2026-08-01T12:20:00Z"]}
+      device: {data_type: text, description: Device category, sample_values: [Desktop, Mobile, Tablet]}
+      browser: {data_type: text, description: Browser family, sample_values: [Chrome, Safari, Firefox, Edge]}
+      operating_system: {data_type: text, description: Operating system family, sample_values: [macOS, iOS, Windows, Android]}
+      channel: {data_type: text, description: Session acquisition channel, sample_values: [Paid Social, Organic Search, Direct]}
+      campaign: {data_type: text, description: Session campaign, sample_values: [social-growth-26, organic-content]}
+      landing_page: {data_type: text, description: Landing page path, sample_values: [/home, /pricing, /compare]}
     pii_columns: []
   events:
     description: Product events recorded within sessions.
     primary_key: event_id
     foreign_keys: {user_id: users.user_id, session_id: sessions.session_id}
     columns: [event_id, user_id, session_id, event_name, event_timestamp, page, feature, properties]
+    allowed_dimensions: [feature, channel, country, device, browser]
+    column_metadata:
+      event_id: {data_type: bigint, description: Compact synthetic event identity, sample_values: [1, 2, 3]}
+      user_id: {data_type: bigint, description: Foreign key to users, sample_values: [1, 2, 3]}
+      session_id: {data_type: bigint, description: Foreign key to sessions, sample_values: [1, 2, 3]}
+      event_name: {data_type: text, description: Product event name, sample_values: [dashboard_viewed, checkout_started, payment_failed]}
+      event_timestamp: {data_type: timestamptz, description: UTC event timestamp, sample_values: ["2026-08-01T12:00:00Z"]}
+      page: {data_type: text, description: Product page associated with the event, sample_values: [/dashboard, /checkout, /onboarding]}
+      feature: {data_type: text, description: Optional feature label, sample_values: [AI Assistant, Integrations, Team Invitations]}
+      properties: {data_type: jsonb, description: Structured synthetic event properties, sample_values: ['{"variant":"control"}']}
     pii_columns: []
   subscriptions:
     description: Trial and paid subscription lifecycle records.
     primary_key: subscription_id
     foreign_keys: {user_id: users.user_id}
     columns: [subscription_id, user_id, plan, status, started_at, trial_started_at, trial_ended_at, cancelled_at, mrr, billing_interval]
+    allowed_dimensions: [plan, country, company_size, channel, cohort]
+    column_metadata:
+      subscription_id: {data_type: bigint, description: Compact synthetic subscription identity, sample_values: [1, 2, 3]}
+      user_id: {data_type: bigint, description: Foreign key to users, sample_values: [1, 2, 3]}
+      plan: {data_type: text, description: Subscription plan, sample_values: [Starter, Pro, Business]}
+      status: {data_type: text, description: Subscription lifecycle status, sample_values: [trialing, active, cancelled]}
+      started_at: {data_type: timestamptz, description: UTC paid start timestamp, sample_values: ["2026-08-01T12:00:00Z"]}
+      trial_started_at: {data_type: timestamptz, description: UTC trial start timestamp, sample_values: ["2026-07-20T12:00:00Z"]}
+      trial_ended_at: {data_type: timestamptz, description: UTC trial end timestamp, sample_values: ["2026-07-27T12:00:00Z"]}
+      cancelled_at: {data_type: timestamptz, description: UTC cancellation timestamp, sample_values: ["2026-08-10T12:00:00Z"]}
+      mrr: {data_type: numeric, description: Monthly normalized recurring value, sample_values: [29.0, 79.0, 199.0]}
+      billing_interval: {data_type: text, description: Billing interval, sample_values: [monthly, annual]}
     pii_columns: []
   transactions:
     description: Synthetic checkout, renewal, and refund transactions.
     primary_key: transaction_id
     foreign_keys: {user_id: users.user_id, subscription_id: subscriptions.subscription_id}
     columns: [transaction_id, user_id, subscription_id, timestamp, amount, currency, status, payment_method, transaction_type, failure_reason]
+    allowed_dimensions: [channel, country, plan, company_size, payment_method, customer_type, revenue_motion, failure_reason]
+    column_metadata:
+      transaction_id: {data_type: bigint, description: Compact synthetic transaction identity, sample_values: [1, 2, 3]}
+      user_id: {data_type: bigint, description: Foreign key to users, sample_values: [1, 2, 3]}
+      subscription_id: {data_type: bigint, description: Optional foreign key to subscriptions, sample_values: [1, 2, 3]}
+      timestamp: {data_type: timestamptz, description: UTC transaction timestamp, sample_values: ["2026-08-01T12:00:00Z"]}
+      amount: {data_type: numeric, description: Non-negative transaction amount, sample_values: [29.0, 79.0, 199.0]}
+      currency: {data_type: char(3), description: Currency code, sample_values: [USD]}
+      status: {data_type: text, description: Transaction outcome, sample_values: [success, failed, refunded]}
+      payment_method: {data_type: text, description: Payment method, sample_values: [Card, PayPal, Bank Transfer]}
+      transaction_type: {data_type: text, description: Charge, renewal, or refund motion, sample_values: [charge, renewal, refund]}
+      failure_reason: {data_type: text, description: Optional failure reason, sample_values: [card_declined, renewal_declined]}
     pii_columns: []
-

@@ -20,6 +20,8 @@ class MetricDefinition(BaseModel):
     numerator_event: str | None = None
     denominator_event: str | None = None
     retention_day: int | None = None
+    retention_window: Literal["weekly", "monthly"] | None = None
+    acquisition_stage: Literal["visitors", "signups", "activated_users", "paid_users", "channel_conversion"] | None = None
 
 
 class DimensionDefinition(BaseModel):
@@ -28,6 +30,16 @@ class DimensionDefinition(BaseModel):
     column: str
     table: str
     sample_values: list[str] = Field(default_factory=list)
+    expression: str | None = None
+    valid_metrics: list[str] = Field(default_factory=list)
+
+
+class ColumnDefinition(BaseModel):
+    name: str
+    data_type: str
+    description: str
+    sample_values: list[str | int | float] = Field(default_factory=list)
+    pii: bool = False
 
 
 class TableDefinition(BaseModel):
@@ -37,6 +49,8 @@ class TableDefinition(BaseModel):
     foreign_keys: dict[str, str] = Field(default_factory=dict)
     columns: list[str]
     pii_columns: list[str]
+    allowed_dimensions: list[str] = Field(default_factory=list)
+    column_metadata: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class SemanticRegistry:
@@ -80,11 +94,37 @@ class SemanticRegistry:
             raise ValueError(f"Dimension '{dimension}' is not valid for {metric}")
 
     def public_catalog(self) -> dict[str, Any]:
+        tables: list[dict[str, Any]] = []
+        for item in self.tables.values():
+            column_metadata = [
+                ColumnDefinition(
+                    name=column,
+                    data_type=str(item.column_metadata.get(column, {}).get("data_type", "unknown")),
+                    description=str(item.column_metadata.get(column, {}).get("description", "")),
+                    sample_values=list(item.column_metadata.get(column, {}).get("sample_values", [])),
+                    pii=column in item.pii_columns,
+                ).model_dump()
+                for column in item.columns
+            ]
+            tables.append(
+                {
+                    **item.model_dump(exclude={"column_metadata"}),
+                    "column_metadata": column_metadata,
+                    "row_count": None,
+                }
+            )
         return {
             "metrics": [item.model_dump() for item in self.metrics.values()],
             "dimensions": [item.model_dump() for item in self.dimensions.values()],
-            "tables": [item.model_dump() for item in self.tables.values()],
+            "tables": tables,
         }
+
+    def public_catalog_with_counts(self, row_counts: dict[str, int] | None = None) -> dict[str, Any]:
+        payload = self.public_catalog()
+        counts = row_counts or {}
+        for table in payload["tables"]:
+            table["row_count"] = counts.get(table["name"])
+        return payload
 
     def relevant_schema_context(self, question: str) -> dict[str, Any]:
         """Return a bounded, PII-free schema context for an ad-hoc SQL prompt.
@@ -139,6 +179,17 @@ class SemanticRegistry:
                     "description": table.description,
                     "primary_key": table.primary_key,
                     "columns": visible_columns,
+                    "column_metadata": [
+                        {
+                            "name": column,
+                            "data_type": str(table.column_metadata.get(column, {}).get("data_type", "unknown")),
+                            "description": str(table.column_metadata.get(column, {}).get("description", "")),
+                            "sample_values": list(table.column_metadata.get(column, {}).get("sample_values", [])),
+                            "pii": column in table.pii_columns,
+                        }
+                        for column in visible_columns
+                    ],
+                    "allowed_dimensions": table.allowed_dimensions,
                 }
             )
             for column, target in table.foreign_keys.items():
@@ -158,6 +209,8 @@ class SemanticRegistry:
                 "table": f"analytics.{item.table}",
                 "column": item.column,
                 "sample_values": item.sample_values,
+                "expression": item.expression,
+                "valid_metrics": item.valid_metrics,
             }
             for name, item in sorted(self.dimensions.items())
             if not dimension_hits or name in dimension_hits

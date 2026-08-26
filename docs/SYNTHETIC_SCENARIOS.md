@@ -7,6 +7,7 @@ The generator injects patterns, not final answers. Validation derives all displa
 3. **Feature/retention association:** users who connect an integration and invite a teammate have a higher generated D30 activity probability.
 4. **Revenue decline:** August SMB monthly subscriptions experience elevated churn and failed renewals.
 5. **Acquisition quality:** Paid Social has high volume but weak activation/retention; Organic Search has lower volume and stronger quality.
+6. **Lifecycle and revenue motion:** every subscription has a `subscription_started` event; cancellations, charges, renewals, refunds, and payment/renewal failure reasons remain separately queryable.
 
 Acceptance validates direction, sample size, and driver ranking. It never compares against a hardcoded narrative response.
 

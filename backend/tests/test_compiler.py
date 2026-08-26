@@ -1,6 +1,11 @@
 import pytest
 
-from app.analytics.sql_compiler import compile_metric, compile_retention_curve
+from app.analytics.sql_compiler import (
+    compile_acquisition,
+    compile_feature_adoption,
+    compile_metric,
+    compile_retention_curve,
+)
 from app.analytics.time_ranges import resolve_period
 from app.models.contracts import Filter
 from app.security.sql_validator import SQLValidator
@@ -65,3 +70,52 @@ def test_retention_curve_compiles_all_windows(cohort_type: str) -> None:
 def test_retention_curve_rejects_unsupported_windows() -> None:
     with pytest.raises(ValueError, match="D1, D7, and D30"):
         compile_retention_curve(resolve_period("last_90_days"), [14])
+
+
+@pytest.mark.parametrize("metric", ["visitors", "signups", "activated_users", "channel_conversion"])
+def test_acquisition_stages_compile_to_safe_sql(metric: str) -> None:
+    proposal = compile_metric(metric, resolve_period("last_week"), "campaign")
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert "landing_page_viewed" in proposal.query
+    assert "signup_completed" in proposal.query
+
+
+@pytest.mark.parametrize("dimension", ["feature", "channel", "device", "plan"])
+def test_feature_adoption_dimensions_compile_to_safe_sql(dimension: str) -> None:
+    proposal = compile_feature_adoption(resolve_period("last_30_days"), dimension)
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert "uses_per_adopter" in proposal.query
+    assert "feature_d30_numerator" in proposal.query
+
+
+def test_acquisition_does_not_accept_transaction_only_filters() -> None:
+    with pytest.raises(ValueError, match="Acquisition filters"):
+        compile_acquisition(
+            resolve_period("last_week"),
+            "channel",
+            filters=[Filter(dimension="failure_reason", value="card_declined")],
+        )
+
+
+def test_paid_users_kpi_uses_successful_transactions_or_period_end_subscriptions() -> None:
+    proposal = compile_metric("paid_users", resolve_period("last_week"), "channel")
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert "t.status='success'" in proposal.query
+    assert "sub.cancelled_at" in proposal.query
+    assert set(validation.tables) == {"sessions", "subscriptions", "transactions", "users"}
+
+
+@pytest.mark.parametrize(
+    ("metric", "start_day", "end_day"),
+    [("weekly_retention", 7, 14), ("monthly_retention", 30, 60)],
+)
+def test_windowed_retention_uses_mature_return_windows(metric: str, start_day: int, end_day: int) -> None:
+    proposal = compile_metric(metric, resolve_period("last_90_days"))
+    validation = SQLValidator().validate(proposal.query)
+    assert validation.valid, validation.errors
+    assert f"interval '{start_day} days'" in proposal.query
+    assert f"interval '{end_day} days'" in proposal.query
+    assert "NULL" not in proposal.query.split("SELECT", 1)[-1] or "NULLIF" in proposal.query

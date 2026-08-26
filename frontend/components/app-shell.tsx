@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { Activity, BarChart3, BookOpen, BrainCircuit, ChevronDown, Database, History, LayoutDashboard, Menu, Network, Sparkles, Target, Users, X } from "lucide-react";
+import { Activity, BarChart3, BookOpen, BrainCircuit, ChevronDown, Database, History, LayoutDashboard, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
 import { cn } from "@/components/ui";
 
 const links = [
@@ -15,6 +15,7 @@ const links = [
   { href: "/analytics/cohorts", label: "Cohorts", icon: Users },
   { href: "/analytics/segments", label: "Segments", icon: BarChart3 },
   { href: "/analytics/feature-adoption", label: "Feature Adoption", icon: Target },
+  { href: "/analytics/acquisition", label: "Acquisition", icon: TrendingUp },
   { section: "Data" },
   { href: "/data/metrics", label: "Metrics", icon: BookOpen },
   { href: "/data/catalog", label: "Data Catalog", icon: Database },
