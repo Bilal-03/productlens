@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -193,6 +194,36 @@ class AnalysisResponse(BaseModel):
     sql: SQLTransparency
     caveats: list[str]
     metadata: AnalysisMetadata
+
+
+class SaveInsightRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    source_query_id: UUID
+    title: str | None = Field(default=None, max_length=160)
+
+
+class NotebookInsight(BaseModel):
+    insight_id: UUID
+    source_query_id: UUID
+    title: str
+    question: str
+    mode: AnalysisMode
+    headline: str
+    summary: str
+    interpretation: Interpretation
+    comparison: ComparisonResult
+    chart: ChartSpec
+    findings: list[Finding]
+    drivers: list[Driver]
+    evidence: list[Evidence]
+    recommendations: list[Recommendation]
+    created_at: datetime
+
+
+class NotebookResponse(BaseModel):
+    type: Literal["analysis_notebook"] = "analysis_notebook"
+    insights: list[NotebookInsight]
+    limit: int
 
 
 class ClarificationOption(BaseModel):

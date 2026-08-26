@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { Activity, BarChart3, BookOpen, BrainCircuit, ChevronDown, Database, FileText, History, LayoutDashboard, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
+import { Activity, BarChart3, BookOpen, Bookmark, BrainCircuit, ChevronDown, Database, FileText, History, LayoutDashboard, Menu, Network, Sparkles, Target, TrendingUp, Users, X } from "lucide-react";
 import { cn } from "@/components/ui";
 
 const links = [
@@ -23,6 +23,7 @@ const links = [
   { section: "Data" },
   { href: "/data/metrics", label: "Metrics", icon: BookOpen },
   { href: "/data/catalog", label: "Data Catalog", icon: Database },
+  { href: "/notebook", label: "Analysis Notebook", icon: Bookmark },
   { href: "/history", label: "History", icon: History },
 ];
 

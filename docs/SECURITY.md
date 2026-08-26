@@ -8,6 +8,7 @@
 - A 5,000-row cap and five-second statement timeout constrain resource use.
 - PostgreSQL permissions independently enforce read-only access.
 - Anonymous session identifiers are HMAC-hashed; raw IP addresses are not stored.
+- Notebook saves accept only a source query ID, then re-read and validate the session-owned history record server-side before storing a snapshot in `operational.saved_insights`.
 - Per-session and global AI quotas protect free provider keys.
 - Deterministic KPI/funnel responses are cached by dataset version; cache writes stay in the operational schema and never bypass the analytics read boundary.
 - Lifecycle, feature, transaction-type, failure-reason, experiment-assignment, and experiment-status indexes support the governed investigations without widening the read boundary.

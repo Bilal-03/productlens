@@ -13,6 +13,8 @@ The P2 proactive suite additionally covers rolling-baseline gates, z-score and p
 
 Phase 39–40 coverage additionally tests deterministic experiment assignments, signup-eligible activation denominators, uplift and relative-uplift arithmetic, normal-approximation intervals, significance and minimum-sample guards, experiment/advanced API contracts, allowlisted advanced dimensions and journey events, observed immature revenue cohorts, dataset-version cache invalidation, partial advanced-query warnings, and desktop/mobile route reachability. The PostgreSQL integration suite executes the seeded onboarding experiment and the advanced analytics queries after migration `0003`; it remains skipped when no database is available.
 
+Phase 43 coverage additionally tests session ownership, idempotent save behavior, typed saved-analysis projections, bounded list/delete contracts, empty and populated notebook states, Copilot source links, and notebook route reachability. The notebook stores only server-validated history snapshots; it does not accept client-supplied SQL or evidence payloads.
+
 The current offline benchmark is 58/58 (`make benchmark`). It checks planner intent/metric/dimensions, compiler table coverage, and controlled chart inference. `make benchmark` intentionally does not claim a live-provider score; provider evaluations must be timestamped separately with the actual model and measured results.
 
 On the clean full-profile local PostgreSQL fixture, uncached acquisition, feature-adoption, retention, and overview calls completed in approximately 442 ms, 1.50 s, 882 ms, and 3.18 s respectively; the cached overview repeated in 3 ms. These are engineering checks on the fixture hardware, not an SLA for Supabase or Vercel.

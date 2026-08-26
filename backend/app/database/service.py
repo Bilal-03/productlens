@@ -4,7 +4,7 @@ import json
 import time
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.pool import NullPool
@@ -215,6 +215,68 @@ class DatabaseService:
                 return None
             return parsed if isinstance(parsed, dict) else None
         return dict(response) if isinstance(response, dict) else None
+
+    def insert_notebook_insight(
+        self,
+        *,
+        session_hash: str,
+        source_query_id: UUID,
+        title: str,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        statement = text(
+            """INSERT INTO operational.saved_insights
+               (insight_id, session_hash, source_query_id, title, response)
+               VALUES (:insight_id, :session_hash, :source_query_id, :title, CAST(:response AS jsonb))
+               ON CONFLICT (session_hash, source_query_id)
+               DO UPDATE SET title=EXCLUDED.title, response=EXCLUDED.response, created_at=now()
+               RETURNING insight_id, source_query_id, title, response, created_at"""
+        )
+        try:
+            with self.app_engine.begin() as connection:
+                row = connection.execute(
+                    statement,
+                    {
+                        "insight_id": uuid4(),
+                        "session_hash": session_hash,
+                        "source_query_id": source_query_id,
+                        "title": title,
+                        "response": json.dumps(response),
+                    },
+                ).mappings().one()
+            return dict(row)
+        except Exception as exc:
+            raise DatabaseUnavailable("The notebook database is unavailable") from exc
+
+    def notebook_insights(self, session_hash: str, limit: int = 50) -> list[dict[str, Any]]:
+        statement = text(
+            """SELECT insight_id, source_query_id, title, response, created_at
+               FROM operational.saved_insights
+               WHERE session_hash = :session_hash
+               ORDER BY created_at DESC, insight_id DESC
+               LIMIT :limit"""
+        )
+        try:
+            with self.app_engine.connect() as connection:
+                return [
+                    dict(row)
+                    for row in connection.execute(
+                        statement, {"session_hash": session_hash, "limit": limit}
+                    ).mappings()
+                ]
+        except Exception as exc:
+            raise DatabaseUnavailable("The notebook database is unavailable") from exc
+
+    def delete_notebook_insight(self, session_hash: str, insight_id: UUID) -> bool:
+        statement = text(
+            "DELETE FROM operational.saved_insights WHERE session_hash=:session_hash AND insight_id=:insight_id"
+        )
+        try:
+            with self.app_engine.begin() as connection:
+                result = connection.execute(statement, {"session_hash": session_hash, "insight_id": insight_id})
+            return result.rowcount > 0
+        except Exception as exc:
+            raise DatabaseUnavailable("The notebook database is unavailable") from exc
 
     def consume_quota(self, session_hash: str, per_hour: int, global_day: int) -> bool:
         now = datetime.now(UTC)

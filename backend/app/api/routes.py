@@ -29,13 +29,17 @@ from app.models.contracts import (
     ExperimentListResponse,
     FeatureAdoptionAnalyticsResponse,
     FunnelRequest,
+    NotebookInsight,
+    NotebookResponse,
     OverviewAnalyticsResponse,
     OverviewRequest,
     ProductPulseResponse,
     RetentionAnalyticsResponse,
     RetentionRequest,
+    SaveInsightRequest,
     WeeklyReportResponse,
 )
+from app.notebook.service import NotebookService
 from app.security.session import hash_session
 from app.security.sql_validator import SQLSafetyPolicy, SQLValidator
 from app.semantic.registry import registry
@@ -101,6 +105,11 @@ def experiment_service() -> ExperimentAnalyticsService:
 @lru_cache
 def advanced_service() -> AdvancedAnalyticsService:
     return AdvancedAnalyticsService(database_service(), sql_validator())
+
+
+@lru_cache
+def notebook_service() -> NotebookService:
+    return NotebookService(database_service())
 
 
 @router.get("/health")
@@ -343,3 +352,49 @@ def history_item(
     if item is None:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return item
+
+
+@router.get("/notebook/insights", response_model=NotebookResponse)
+def notebook_insights(
+    x_productlens_session: str = Header(min_length=20, max_length=128),
+    limit: int = Query(default=50, ge=1, le=50),
+    settings: Settings = Depends(get_settings),
+    service: NotebookService = Depends(notebook_service),
+) -> NotebookResponse:
+    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    try:
+        return NotebookResponse(insights=service.list(session_hash, limit), limit=limit)
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/notebook/insights", response_model=NotebookInsight, status_code=201)
+def save_notebook_insight(
+    request: SaveInsightRequest,
+    x_productlens_session: str = Header(min_length=20, max_length=128),
+    settings: Settings = Depends(get_settings),
+    service: NotebookService = Depends(notebook_service),
+) -> NotebookInsight:
+    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    try:
+        return service.save(session_hash, request.source_query_id, request.title)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.delete("/notebook/insights/{insight_id}", status_code=204)
+def delete_notebook_insight(
+    insight_id: UUID,
+    x_productlens_session: str = Header(min_length=20, max_length=128),
+    settings: Settings = Depends(get_settings),
+    service: NotebookService = Depends(notebook_service),
+) -> None:
+    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    try:
+        deleted = service.delete(session_hash, insight_id)
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Saved insight not found")

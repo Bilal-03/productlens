@@ -17,7 +17,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "X-ProductLens-Session"],
 )
 app.include_router(router, prefix=settings.api_prefix)
@@ -34,4 +34,3 @@ async def request_size_limit(request: Request, call_next):  # type: ignore[no-un
 @app.get("/")
 def root() -> dict[str, str]:
     return {"service": "ProductLens AI", "docs": "/docs", "health": f"{settings.api_prefix}/health"}
-

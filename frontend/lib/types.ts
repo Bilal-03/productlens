@@ -12,6 +12,31 @@ export type AnalysisResponse = {
   follow_up_questions: string[]; investigation_trace: string[]; sql: { query: string; purpose: string; tables: string[]; metrics: string[]; validated: boolean; row_count: number };
   caveats: string[]; metadata: { query_id: string; generated_at: string; dataset_as_of: string; provider: string; confidence: "high" | "medium" | "low"; model?: string | null; input_tokens?: number | null; output_tokens?: number | null; timings: { total_ms: number; planner_ms: number; execution_ms: number; analysis_ms: number; interpretation_ms: number } };
 };
+
+export type NotebookInsight = {
+  insight_id: string;
+  source_query_id: string;
+  title: string;
+  question: string;
+  mode: "quick" | "deep";
+  headline: string;
+  summary: string;
+  interpretation: AnalysisResponse["interpretation"];
+  comparison: AnalysisResponse["comparison"];
+  chart: ChartSpec;
+  findings: Finding[];
+  drivers: Driver[];
+  evidence: Evidence[];
+  recommendations: AnalysisResponse["recommendations"];
+  created_at: string;
+};
+
+export type NotebookResponse = {
+  type: "analysis_notebook";
+  insights: NotebookInsight[];
+  limit: number;
+};
+
 export type ClarificationResponse = { type: "clarification"; question: string; reason: string; options: { metric: string; label: string; definition: string }[] };
 export type ErrorResponse = { type: "error"; code: string; message: string; retryable: boolean; query_id?: string };
 export type CopilotResponse = AnalysisResponse | ClarificationResponse | ErrorResponse;

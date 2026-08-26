@@ -19,6 +19,11 @@ test("history route is reachable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Recent investigations" })).toBeVisible();
 });
 
+test("analysis notebook route is reachable", async ({ page }) => {
+  await page.goto("/notebook");
+  await expect(page.getByRole("heading", { name: "Saved investigations" })).toBeVisible();
+});
+
 test("proactive analytics routes are reachable", async ({ page }) => {
   await page.goto("/insights");
   await expect(page.getByRole("heading", { name: "Product Pulse" })).toBeVisible();
@@ -46,6 +51,7 @@ test("mobile navigation exposes every primary destination", async ({ page }, tes
   await expect(navigation).toBeVisible();
   await expect(navigation.getByRole("link", { name: "Acquisition" })).toBeVisible();
   await expect(navigation.getByRole("link", { name: "History" })).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "Analysis Notebook" })).toBeVisible();
   await expect(navigation.getByRole("link", { name: "Product Pulse" })).toBeVisible();
   await expect(navigation.getByRole("link", { name: "Weekly Report" })).toBeVisible();
   await expect(navigation.getByRole("link", { name: "Experiments" })).toBeVisible();

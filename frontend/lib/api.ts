@@ -1,4 +1,4 @@
-import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
@@ -16,6 +16,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.detail ?? `Request failed (${response.status})`);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -25,6 +26,27 @@ export function analyze(question: string, mode: "quick" | "deep", selected_metri
 
 export function getHistoryItem(queryId: string) {
   return api<CopilotResponse>(`/history/${encodeURIComponent(queryId)}`, {
+    headers: { "X-ProductLens-Session": getSessionId() },
+  });
+}
+
+export function getNotebook(limit = 50) {
+  return api<NotebookResponse>(`/notebook/insights?limit=${limit}`, {
+    headers: { "X-ProductLens-Session": getSessionId() },
+  });
+}
+
+export function saveNotebookInsight(sourceQueryId: string, title?: string) {
+  return api<NotebookInsight>("/notebook/insights", {
+    method: "POST",
+    headers: { "X-ProductLens-Session": getSessionId() },
+    body: JSON.stringify({ source_query_id: sourceQueryId, ...(title ? { title } : {}) }),
+  });
+}
+
+export function deleteNotebookInsight(insightId: string) {
+  return api<void>(`/notebook/insights/${encodeURIComponent(insightId)}`, {
+    method: "DELETE",
     headers: { "X-ProductLens-Session": getSessionId() },
   });
 }
