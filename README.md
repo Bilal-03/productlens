@@ -2,7 +2,7 @@
 
 ProductLens AI is an AI-assisted product analytics workspace that turns natural-language business questions into validated analytical investigations. It combines a governed semantic metrics layer, AST-validated read-only SQL, deterministic product analytics, controlled visualizations, and evidence-backed recommendations.
 
-> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. Phase 39 experiment analytics and Phase 40 descriptive advanced analytics are live through the default 90-day surface. Phase 43 saved-analysis notebook work is in progress; predictive/forecast analytics and P3 extensions remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
+> Current status: P0/P1 parity and the P2 proactive analytics milestone are implemented, deployed, and smoke-tested in production. Phase 39 experiment analytics and Phase 40 descriptive advanced analytics are live through the default 90-day surface. Phase 43 saved-analysis notebook and deterministic executive-summary work are implemented; predictive/forecast analytics and P3 extensions remain deferred. See [Implementation Status](docs/IMPLEMENTATION_STATUS.md) for the evidence matrix.
 
 ## Why it exists
 
@@ -23,7 +23,7 @@ It is deliberately not a generic chatbot or unrestricted text-to-SQL wrapper.
 - Query transparency, anonymous-session history, audit logs, and confidence/caveats
 - Explainable anomaly detection, Product Pulse, deterministic weekly reports, and Markdown export
 - Governed experiment comparisons plus deterministic churn-risk, journey, stickiness, power-user, and observed revenue-cohort analytics (Phase 39–40 first slice)
-- Session-scoped Analysis Notebook for pinning and reopening validated investigations (Phase 43 first slice)
+- Session-scoped Analysis Notebook for pinning, reopening, and summarizing validated investigations (Phase 43)
 - A reproducible synthetic dataset with known diagnostic scenarios
 
 ## Local setup
@@ -40,7 +40,7 @@ Prerequisites: Docker, Node 22.x, npm 10+, and Python 3.12+.
 
 The dataset is synthetic and anchored to 2026-08-24 so relative-period demo questions remain reproducible.
 
-Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. Phase 39–40 gates additionally cover experiment assignment semantics, uplift/significance guards, advanced query allowlists, UTC daily-activity rollup semantics, cache invalidation, partial-result contracts, API/UI surfaces, and opt-in PostgreSQL execution. Phase 43 gates cover session scoping, idempotent notebook persistence, saved-analysis projection, and responsive route/component states. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. Local PostgreSQL-backed tests remain opt-in when a database is unavailable; Phase 39 and Phase 40 are live, and the Phase 43 notebook route is live while its executive-summary slice remains in progress.
+Validation gates include the existing offline planner/table/chart benchmark, adversarial SQL-safety corpus, frontend lint/typecheck/Vitest/build, deployment preflight, and desktop/mobile Playwright flows. The P2 unit and contract gates cover governed daily series, anomaly policy, caching, typed report APIs, Markdown export, and Product Pulse/report components. Phase 39–40 gates additionally cover experiment assignment semantics, uplift/significance guards, advanced query allowlists, UTC daily-activity rollup semantics, cache invalidation, partial-result contracts, API/UI surfaces, and opt-in PostgreSQL execution. Phase 43 gates cover session scoping, idempotent notebook persistence, evidence-bound deterministic summary aggregation, saved-analysis projection, and responsive route/component states. The full deterministic profile produces 20,000 users, 120,000 sessions, 624,021 events, 12,000 subscriptions, and 25,000 transactions; production was measured at 199 MB against the documented 450 MB ceiling. Local PostgreSQL-backed tests remain opt-in when a database is unavailable; Phase 39 and Phase 40 are live, and the Phase 43 notebook route and summary surface are implemented for deployment.
 
 ## Documentation
 

@@ -2,14 +2,53 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Bookmark, Check, Clock, ExternalLink, Sparkles, Trash2 } from "lucide-react";
-import { deleteNotebookInsight, getNotebook } from "@/lib/api";
-import type { NotebookInsight } from "@/lib/types";
+import { Bookmark, Check, Clock, ExternalLink, FileText, Sparkles, Trash2 } from "lucide-react";
+import { deleteNotebookInsight, getNotebook, getNotebookSummary } from "@/lib/api";
+import type { NotebookInsight, NotebookSummary } from "@/lib/types";
 import { Badge, Button, Card } from "@/components/ui";
 import { PageHeading } from "@/components/page-heading";
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function NotebookSummaryCard({ summary }: { summary: NotebookSummary }) {
+  const findings = summary.findings.slice(0, 6);
+  const drivers = summary.drivers.slice(0, 8);
+  const recommendations = summary.recommendations.slice(0, 6);
+  return <Card className="overflow-hidden border-[#dcd8ff]">
+    <div className="border-b border-[#e5e8ee] bg-gradient-to-r from-[#f6f4ff] via-white to-[#fbfbff] p-5 md:p-7">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2"><Badge tone="accent">Executive summary</Badge><span className="text-xs text-[#747b8b]">{summary.methodology.source_insight_count} validated snapshot{summary.methodology.source_insight_count === 1 ? "" : "s"}</span></div>
+          <h2 className="mt-3 text-xl font-bold tracking-tight md:text-2xl">{summary.headline}</h2>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-[#626a7a]">{summary.summary}</p>
+        </div>
+        <div className="shrink-0 rounded-xl bg-[#eeecff] p-3 text-[#635bff]"><FileText size={19}/></div>
+      </div>
+    </div>
+
+    <div className="grid gap-5 p-5 md:grid-cols-2 md:p-7">
+      <section aria-labelledby="notebook-summary-themes">
+        <div id="notebook-summary-themes" className="eyebrow">Key themes</div>
+        <div className="mt-3 space-y-2">
+          {summary.themes.map((theme) => <div key={theme.metric} className="rounded-xl border border-[#e6e9ef] p-3"><div className="flex items-center justify-between gap-3 text-sm"><span className="font-semibold">{theme.metric_label}</span><span className="text-xs text-[#7b8292]">{theme.insight_count} saved</span></div><p className="mt-1 text-xs leading-5 text-[#747b8b]">{theme.headline}</p></div>)}
+        </div>
+      </section>
+      <section aria-labelledby="notebook-summary-findings">
+        <div id="notebook-summary-findings" className="eyebrow">Key findings</div>
+        <div className="mt-3 space-y-3">
+          {findings.length > 0 ? findings.map((finding, index) => <div key={`${finding.kind}-${index}`} className="flex gap-2 text-sm text-[#5f6676]"><Check size={15} className="mt-0.5 shrink-0 text-[#16875d]"/><div><div className="text-[10px] font-bold uppercase tracking-[.1em] text-[#8b92a1]">{finding.kind.replaceAll("_", " ")}</div><p className="mt-1 leading-5">{finding.text}</p></div></div>) : <p className="text-sm text-[#747b8b]">No evidence-backed findings were available in the saved snapshots.</p>}
+        </div>
+      </section>
+    </div>
+
+    {drivers.length > 0 && <div className="border-t border-[#e5e8ee] px-5 py-5 md:px-7"><div className="eyebrow">Top drivers across the board</div><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{drivers.map((driver) => <div key={`${driver.dimension}-${driver.segment}`} className="rounded-xl border border-[#e6e9ef] px-3 py-2.5"><div className="flex items-center justify-between gap-3 text-sm"><span className="truncate font-semibold">{driver.segment}</span><span className="shrink-0 text-xs text-[#7b8292]">n={driver.sample_size.toLocaleString()}</span></div><div className="mt-1 text-xs text-[#747b8b]">{driver.dimension} · current {driver.current_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div></div>)}</div></div>}
+
+    {recommendations.length > 0 && <div className="border-t border-[#e5e8ee] px-5 py-5 md:px-7"><div className="eyebrow">Recommended actions</div><div className="mt-3 grid gap-3 lg:grid-cols-2">{recommendations.map((recommendation) => <div key={recommendation.action} className="rounded-xl border border-[#e6e9ef] p-3"><div className="flex items-start justify-between gap-3"><p className="text-sm font-semibold">{recommendation.action}</p><Badge tone={recommendation.priority === "high" ? "warning" : "neutral"}>{recommendation.priority}</Badge></div><p className="mt-2 text-xs leading-5 text-[#747b8b]">{recommendation.expected_impact}</p><p className="mt-2 text-xs font-semibold text-[#5148d9]">Validate: {recommendation.how_to_validate}</p></div>)}</div></div>}
+
+    <details className="border-t border-[#e5e8ee] px-5 py-4 md:px-7"><summary className="cursor-pointer text-sm font-bold">How this summary was created</summary><div className="mt-3 text-xs leading-5 text-[#747b8b]"><p>Only the saved, server-validated analysis snapshots in this session were aggregated. No source SQL was rerun and no new evidence was generated.</p><p className="mt-2">{summary.methodology.evidence_bound ? "Every displayed finding and action remains tied to source evidence." : "Some source content was not evidence-bound."} {summary.methodology.deterministic ? "The aggregation is deterministic." : "The aggregation includes non-deterministic content."}</p></div></details>
+  </Card>;
 }
 
 function NotebookCard({ item, onDelete, deleting }: { item: NotebookInsight; onDelete: (id: string) => void; deleting: boolean }) {
@@ -57,9 +96,10 @@ function NotebookCard({ item, onDelete, deleting }: { item: NotebookInsight; onD
 export function NotebookPage() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["notebook"], queryFn: () => getNotebook() });
+  const summary = useQuery({ queryKey: ["notebook-summary"], queryFn: () => getNotebookSummary(), enabled: false, retry: false });
   const removal = useMutation({
     mutationFn: (insightId: string) => deleteNotebookInsight(insightId),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ["notebook"] }); },
+    onSuccess: () => { void client.invalidateQueries({ queryKey: ["notebook"] }); client.removeQueries({ queryKey: ["notebook-summary"] }); },
   });
   const insights = query.data?.insights ?? [];
 
@@ -68,6 +108,8 @@ export function NotebookPage() {
     {query.isLoading && <div className="space-y-4"><div className="skeleton h-64"/><div className="skeleton h-64"/></div>}
     {query.isError && <Card className="border-[#ffd8dc] bg-[#fffafb] p-6"><Badge tone="warning">Notebook unavailable</Badge><h2 className="mt-3 text-lg font-bold">Saved investigations could not be loaded</h2><p className="mt-2 text-sm text-[#747b8b]">{query.error instanceof Error ? query.error.message : "The notebook service is unavailable."}</p></Card>}
     {!query.isLoading && !query.isError && insights.length === 0 && <Card className="grid min-h-80 place-items-center p-6 text-center"><div><div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-[#f1f0ff] text-[#635bff]"><Bookmark size={20}/></div><h2 className="mt-4 font-bold">No saved analyses yet</h2><p className="mt-2 max-w-sm text-sm leading-6 text-[#747b8b]">Run an investigation in Copilot, then choose “Save to notebook” to build a decision trail.</p><Button asChild className="mt-5"><Link href="/copilot"><Sparkles size={15}/>Start an analysis</Link></Button></div></Card>}
+    {insights.length > 0 && <Card className="mb-5 border-[#e4e1ff] bg-[#fbfaff] p-4 md:p-5"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><div className="eyebrow">Decision brief</div><h2 className="mt-1 text-lg font-bold">Distill this notebook into an executive summary</h2><p className="mt-1 text-sm text-[#747b8b]">Aggregate the saved evidence into a deterministic board-level readout.</p></div><Button variant="secondary" onClick={() => void summary.refetch()} disabled={summary.isFetching}><FileText size={15}/>{summary.isFetching ? "Generating…" : summary.data?.summary ? "Regenerate summary" : "Generate executive summary"}</Button></div>{summary.isError && <p className="mt-3 text-xs text-[#bd3446]">{summary.error instanceof Error ? summary.error.message : "The executive summary could not be generated."}</p>}</Card>}
+    {summary.data?.summary && <div className="mb-5"><NotebookSummaryCard summary={summary.data.summary}/></div>}
     {insights.length > 0 && <div className="space-y-5">{insights.map((item) => <NotebookCard key={item.insight_id} item={item} onDelete={(id) => removal.mutate(id)} deleting={removal.isPending && removal.variables === item.insight_id}/>)}</div>}
     {query.data && <div className="mt-5 flex items-center gap-2 text-xs text-[#7b8292]"><Bookmark size={13}/>Showing {insights.length} saved {insights.length === 1 ? "investigation" : "investigations"} · content is a snapshot of the validated analysis.</div>}
   </>;

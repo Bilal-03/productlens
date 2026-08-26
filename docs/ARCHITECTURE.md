@@ -45,10 +45,10 @@ The first Phase 40 slice is descriptive rather than predictive. Churn risk is a 
 ```text
 Copilot result → session-authenticated source query ID → history ownership check
               → validated analysis snapshot → saved_insights → notebook board
-              → reopen source evidence / remove saved item
+              → reopen source evidence / remove saved item → deterministic summary
 ```
 
-Phase 43’s first slice stores a server-side snapshot of a validated `AnalysisResponse`. The client never posts arbitrary evidence or SQL: it submits only the source query ID, and the API hashes the anonymous session before reading history. The unique `(session_hash, source_query_id)` key makes saves idempotent; the `app_writer` role can manage only the operational notebook table. Executive summaries over a saved board remain a later slice.
+Phase 43 stores a server-side snapshot of a validated `AnalysisResponse`. The client never posts arbitrary evidence or SQL: it submits only the source query ID, and the API hashes the anonymous session before reading history. The unique `(session_hash, source_query_id)` key makes saves idempotent; the `app_writer` role can manage only the operational notebook table. `GET /api/v1/notebook/summary` aggregates the saved snapshots in the session using deterministic, evidence-bound themes, findings, drivers, and recommendations. It does not rerun source SQL or generate new evidence, and every displayed summary item retains source insight and evidence IDs.
 
 ## Boundaries
 

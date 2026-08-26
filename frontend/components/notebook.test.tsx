@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotebookPage } from "@/components/notebook";
-import { getNotebook } from "@/lib/api";
-import type { NotebookInsight, NotebookResponse } from "@/lib/types";
+import { getNotebook, getNotebookSummary } from "@/lib/api";
+import type { NotebookInsight, NotebookResponse, NotebookSummary } from "@/lib/types";
 
 vi.mock("next/link", () => ({ default: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props}>{children}</a> }));
-vi.mock("@/lib/api", () => ({ deleteNotebookInsight: vi.fn(), getNotebook: vi.fn() }));
+vi.mock("@/lib/api", () => ({ deleteNotebookInsight: vi.fn(), getNotebook: vi.fn(), getNotebookSummary: vi.fn() }));
 
 const insight: NotebookInsight = {
   insight_id: "11111111-1111-4111-8111-111111111111",
@@ -33,6 +33,18 @@ const insight: NotebookInsight = {
   recommendations: [], created_at: "2026-08-26T00:00:00Z",
 };
 
+const summary: NotebookSummary = {
+  generated_at: "2026-08-26T00:00:00Z",
+  headline: "Executive summary across 1 saved investigation",
+  summary: "The saved evidence points to a checkout conversion issue on Safari.",
+  source_insight_ids: [insight.insight_id],
+  themes: [{ metric: "checkout_conversion", metric_label: "Checkout Conversion", insight_count: 1, headline: insight.headline, summary: insight.summary, evidence_ids: ["metric"], source_insight_ids: [insight.insight_id] }],
+  findings: [{ ...insight.findings[0], source_insight_ids: [insight.insight_id] }],
+  drivers: [{ ...insight.drivers[0], source_insight_ids: [insight.insight_id] }],
+  recommendations: [],
+  methodology: { source_insight_count: 1, evidence_bound: true, snapshot_only: true, deterministic: true },
+};
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={client}><NotebookPage /></QueryClientProvider>);
@@ -53,11 +65,15 @@ describe("analysis notebook", () => {
   it("renders a saved signal map and opens the source analysis", async () => {
     const payload: NotebookResponse = { type: "analysis_notebook", insights: [insight], limit: 50 };
     vi.mocked(getNotebook).mockResolvedValue(payload);
+    vi.mocked(getNotebookSummary).mockResolvedValue({ type: "notebook_summary", summary, insight_count: 1, limit: 50, warnings: [] });
     renderPage();
 
     expect(await screen.findByText("Checkout incident")).toBeVisible();
     expect(screen.getByText("Conversion decreased week over week.")).toBeVisible();
     expect(screen.getByText("Safari")).toBeVisible();
     expect(screen.getByRole("link", { name: /Open full analysis/ })).toHaveAttribute("href", `/copilot?query_id=${insight.source_query_id}`);
+    fireEvent.click(screen.getByRole("button", { name: "Generate executive summary" }));
+    expect(await screen.findByRole("heading", { name: summary.headline })).toBeVisible();
+    expect(screen.getByText("Key themes")).toBeVisible();
   });
 });

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import notebook_service
 from app.main import app
-from app.models.contracts import AnalysisResponse, NotebookInsight
+from app.models.contracts import AnalysisResponse, NotebookInsight, NotebookSummary
 from app.notebook.service import NotebookService
 
 
@@ -100,6 +100,36 @@ def test_notebook_save_is_idempotent_and_session_scoped() -> None:
         service.save("session-b", query_id)
 
 
+def test_notebook_summary_aggregates_only_saved_evidence() -> None:
+    first_query_id = uuid4()
+    second_query_id = uuid4()
+    database = FakeDatabase(first_query_id)
+    second = analysis(second_query_id).model_copy(update={
+        "headline": "Activation improved after onboarding change",
+        "summary": "Activation increased in the saved comparison.",
+        "interpretation": analysis(second_query_id).interpretation.model_copy(
+            update={"metric": "activation_rate", "metric_label": "Activation Rate"}
+        ),
+    })
+    database.history[second_query_id] = second.model_dump(mode="json")
+    service = NotebookService(database)  # type: ignore[arg-type]
+
+    first_saved = service.save("session-a", first_query_id)
+    second_saved = service.save("session-a", second_query_id)
+    summary = service.summary("session-a")
+
+    assert summary is not None
+    assert summary.methodology.source_insight_count == 2
+    assert summary.source_insight_ids == [first_saved.insight_id, second_saved.insight_id]
+    assert {theme.metric for theme in summary.themes} == {"checkout_conversion", "activation_rate"}
+    assert summary.findings
+    assert summary.drivers[0].source_insight_ids == [first_saved.insight_id, second_saved.insight_id]
+    assert summary.recommendations[0].evidence_ids == ["safari"]
+    assert summary.methodology.evidence_bound is True
+    assert summary.methodology.snapshot_only is True
+    assert summary.methodology.deterministic is True
+
+
 def test_notebook_routes_validate_session_limit_and_delete() -> None:
     query_id = uuid4()
     insight = NotebookInsight.model_validate({
@@ -122,12 +152,30 @@ def test_notebook_routes_validate_session_limit_and_delete() -> None:
         def delete(self, session_hash: str, insight_id: UUID) -> bool:
             return insight_id == insight.insight_id
 
+        def summary(self, session_hash: str, limit: int) -> NotebookSummary:
+            return NotebookSummary(
+                generated_at=datetime(2026, 8, 26, tzinfo=UTC),
+                headline="Executive summary across one saved investigation",
+                summary="A validated saved investigation is ready for review.",
+                source_insight_ids=[insight.insight_id],
+                themes=[],
+                findings=[],
+                drivers=[],
+                recommendations=[],
+                methodology={"source_insight_count": 1},
+            )
+
     app.dependency_overrides[notebook_service] = lambda: StubNotebook()  # type: ignore[assignment]
     client = TestClient(app)
     headers = {"X-ProductLens-Session": "notebook-api-contract-session"}
     try:
         assert client.get("/api/v1/notebook/insights", headers=headers).json()["type"] == "analysis_notebook"
         assert client.get("/api/v1/notebook/insights?limit=51", headers=headers).status_code == 422
+        summary_response = client.get("/api/v1/notebook/summary", headers=headers)
+        assert summary_response.status_code == 200
+        assert summary_response.json()["type"] == "notebook_summary"
+        assert summary_response.json()["insight_count"] == 1
+        assert client.get("/api/v1/notebook/summary?limit=51", headers=headers).status_code == 422
         assert client.post("/api/v1/notebook/insights", headers=headers, json={"source_query_id": str(query_id)}).status_code == 201
         assert client.delete(f"/api/v1/notebook/insights/{insight.insight_id}", headers=headers).status_code == 204
         assert client.get("/api/v1/notebook/insights").status_code == 422

@@ -226,6 +226,55 @@ class NotebookResponse(BaseModel):
     limit: int
 
 
+class NotebookSummaryTheme(BaseModel):
+    metric: str
+    metric_label: str
+    insight_count: int
+    headline: str
+    summary: str
+    evidence_ids: list[str]
+    source_insight_ids: list[UUID]
+
+
+class NotebookSummaryFinding(Finding):
+    source_insight_ids: list[UUID]
+
+
+class NotebookSummaryDriver(Driver):
+    source_insight_ids: list[UUID]
+
+
+class NotebookSummaryRecommendation(Recommendation):
+    source_insight_ids: list[UUID]
+
+
+class NotebookSummaryMethodology(BaseModel):
+    source_insight_count: int
+    evidence_bound: bool = True
+    snapshot_only: bool = True
+    deterministic: bool = True
+
+
+class NotebookSummary(BaseModel):
+    generated_at: datetime
+    headline: str
+    summary: str
+    source_insight_ids: list[UUID]
+    themes: list[NotebookSummaryTheme]
+    findings: list[NotebookSummaryFinding]
+    drivers: list[NotebookSummaryDriver]
+    recommendations: list[NotebookSummaryRecommendation]
+    methodology: NotebookSummaryMethodology
+
+
+class NotebookSummaryResponse(BaseModel):
+    type: Literal["notebook_summary"] = "notebook_summary"
+    summary: NotebookSummary | None = None
+    insight_count: int
+    limit: int
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ClarificationOption(BaseModel):
     metric: str
     label: str

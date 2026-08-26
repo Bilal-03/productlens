@@ -37,6 +37,45 @@ export type NotebookResponse = {
   limit: number;
 };
 
+export type NotebookSummaryTheme = {
+  metric: string;
+  metric_label: string;
+  insight_count: number;
+  headline: string;
+  summary: string;
+  evidence_ids: string[];
+  source_insight_ids: string[];
+};
+
+export type NotebookSummaryFinding = Finding & { source_insight_ids: string[] };
+export type NotebookSummaryDriver = Driver & { source_insight_ids: string[] };
+export type NotebookSummaryRecommendation = AnalysisResponse["recommendations"][number] & { source_insight_ids: string[] };
+
+export type NotebookSummary = {
+  generated_at: string;
+  headline: string;
+  summary: string;
+  source_insight_ids: string[];
+  themes: NotebookSummaryTheme[];
+  findings: NotebookSummaryFinding[];
+  drivers: NotebookSummaryDriver[];
+  recommendations: NotebookSummaryRecommendation[];
+  methodology: {
+    source_insight_count: number;
+    evidence_bound: boolean;
+    snapshot_only: boolean;
+    deterministic: boolean;
+  };
+};
+
+export type NotebookSummaryResponse = {
+  type: "notebook_summary";
+  summary: NotebookSummary | null;
+  insight_count: number;
+  limit: number;
+  warnings: string[];
+};
+
 export type ClarificationResponse = { type: "clarification"; question: string; reason: string; options: { metric: string; label: string; definition: string }[] };
 export type ErrorResponse = { type: "error"; code: string; message: string; retryable: boolean; query_id?: string };
 export type CopilotResponse = AnalysisResponse | ClarificationResponse | ErrorResponse;

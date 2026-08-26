@@ -31,6 +31,7 @@ from app.models.contracts import (
     FunnelRequest,
     NotebookInsight,
     NotebookResponse,
+    NotebookSummaryResponse,
     OverviewAnalyticsResponse,
     OverviewRequest,
     ProductPulseResponse,
@@ -364,6 +365,25 @@ def notebook_insights(
     session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
     try:
         return NotebookResponse(insights=service.list(session_hash, limit), limit=limit)
+    except DatabaseUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/notebook/summary", response_model=NotebookSummaryResponse)
+def notebook_summary(
+    x_productlens_session: str = Header(min_length=20, max_length=128),
+    limit: int = Query(default=50, ge=1, le=50),
+    settings: Settings = Depends(get_settings),
+    service: NotebookService = Depends(notebook_service),
+) -> NotebookSummaryResponse:
+    session_hash = hash_session(x_productlens_session, settings.session_hmac_secret.get_secret_value())
+    try:
+        summary = service.summary(session_hash, limit)
+        return NotebookSummaryResponse(
+            summary=summary,
+            insight_count=summary.methodology.source_insight_count if summary else 0,
+            limit=limit,
+        )
     except DatabaseUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

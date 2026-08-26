@@ -1,4 +1,4 @@
-import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
+import type { AdvancedAnalyticsResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
@@ -32,6 +32,12 @@ export function getHistoryItem(queryId: string) {
 
 export function getNotebook(limit = 50) {
   return api<NotebookResponse>(`/notebook/insights?limit=${limit}`, {
+    headers: { "X-ProductLens-Session": getSessionId() },
+  });
+}
+
+export function getNotebookSummary(limit = 50) {
+  return api<NotebookSummaryResponse>(`/notebook/summary?limit=${limit}`, {
     headers: { "X-ProductLens-Session": getSessionId() },
   });
 }
