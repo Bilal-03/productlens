@@ -13,11 +13,36 @@ Run `make preflight` after the frontend production build. The dependency-free ga
 1. In Supabase, click **Connect** and copy a direct connection string for administration/migrations. Supabase documents direct port `5432` as the option for migrations; use the session pooler on port `5432` instead if your network is IPv4-only. Keep the password private. ([Connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres))
 2. Set `DATABASE_SUPERUSER_URL`, `MIGRATION_OWNER_PASSWORD`, `APP_WRITER_PASSWORD`, and `ANALYTICS_READER_PASSWORD` in a local shell, then run `make bootstrap-roles`. The command creates the three least-privilege roles without storing their passwords in the repository.
 3. Replace the role URLs in your local environment with the Supabase host, database, and corresponding role passwords. Run `make migrate` (including migrations `0002_p0p1_completion`, `0003_experiments_advanced`, `0004_advanced_perf`, `0005_analysis_notebook`, and `0006_daily_activity`), then `make seed` for a fresh deterministic load. Migration `0006_daily_activity` backfills the existing events in UTC, so a reseed is not required solely for this migration. Confirm the generated database remains below 450 MB and that the analytics-reader role can select approved views only.
-4. Create a Vercel project rooted at `backend/`. Deploy the FastAPI function from `api/index.py` and set `APP_DATABASE_URL`, `ANALYTICS_DATABASE_URL`, `FRONTEND_ORIGIN`, `SESSION_HMAC_SECRET`, `ACCESS_TOKEN_SECRET`, provider keys/models, quotas, cache TTL, `DATASET_VERSION_CACHE_SECONDS=5`, timeout, row-limit, `PROACTIVE_REPORT_BUDGET_MS=45000`, `REPORT_PROVIDER_TIMEOUT_MS=2500`, `SSE_MAX_DURATION_SECONDS` (at most 55), `SSE_POLL_INTERVAL_SECONDS`, `MULTI_AGENT_ENABLED`, and `MULTI_AGENT_TIMEOUT_MS`. For OIDC, copy the exact issuer URL and API audience from the identity provider, set its published JWKS URL, set the custom workspace and groups claim names, and configure `OIDC_ROLE_GROUPS` as JSON such as `{"admin":["productlens-admin"],"analyst":["productlens-analyst"],"viewer":["productlens-viewer"]}`. `ACCESS_TOKEN_SECRET` remains a separate high-entropy production secret for the legacy trusted-gateway assertion; no token issuance endpoint is deployed. Keep `DATABASE_ADMIN_URL` local/CI-only for migrations and seeding; it is not needed by the runtime API. For Supabase transaction-pooler URLs, the backend disables prepared statements for compatibility. Do not expose database URLs, connector URLs, HMAC secrets, OIDC settings, or provider keys as `NEXT_PUBLIC_*` variables.
-5. Create a second Vercel project rooted at `frontend/`, select Node.js 22.x, use `npm run build`, and set `NEXT_PUBLIC_API_URL` to the deployed backend `/api/v1` URL. If protected login is enabled, also set the public `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` values; never set a Supabase service-role key on the frontend.
-6. In Supabase Auth, enable the Email provider and choose the email-confirmation behavior for the deployment. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` on the frontend. Configure the Supabase Custom Access Token Hook (or equivalent trusted claim hook) to place a verified `workspace_id` and `groups` array at the top level of the access token. Configure the backend OIDC issuer/audience/JWKS values for the same project and set the exact group mapping. The frontend anon key is public; never place the service-role key in Vercel frontend variables.
-7. Configure the backend tenant registry. For example, set `TENANT_SOURCE_CONFIG={"workspace-acme":{"source_id":"acme-postgres","url_env":"TENANT_ACME_DATABASE_URL"}}` and set `TENANT_ACME_DATABASE_URL` to a server-only read-only PostgreSQL connection string. The external source must expose the governed `analytics` views and columns in `backend/app/semantic/schema.yml`, including `daily_activity` for advanced analytics. Repeat the mapping for each workspace; do not accept these values from the browser. `GET /api/v1/connectors/status` must report a healthy, contract-valid source for the authenticated workspace before protected analytics are enabled.
-8. After both projects are live, verify `GET /api/v1/health`, anonymous demo access, authenticated `GET /api/v1/access/context`, `GET /api/v1/connectors/status`, `GET /api/v1/metadata/dataset`, KPI, overview, acquisition, feature adoption, weekly/monthly retention, exact history reopening, Product Pulse, weekly report, Markdown download headers, the experiment catalog and onboarding-redesign analysis, advanced analytics, the flagship Deep Dive checkout question, the notebook list/summary routes, `GET /api/v1/stream/analytics`, and destructive-request rejection from desktop and mobile browsers. Save one or more analyses in the same browser session before checking the non-empty notebook summary. Confirm the first weekly report and advanced/experiment requests complete within their configured limits, repeated requests are served from the tenant/source cache namespace, SSE reconnects with `Last-Event-ID`, and no token appears in a URL. Capture the successful overview, Copilot evidence/trace, connector status, acquisition, retention, experiment, advanced-analytics, and notebook screens for the case study.
+### High-Performance Deployment (Render Backend + Vercel Frontend)
+
+1. **Deploy Backend to Render**:
+   - In [Render Dashboard](https://dashboard.render.com), click **New +** -> **Web Service** (or use the Blueprint from `render.yaml`).
+   - Connect the repository and set:
+     - **Root Directory**: `backend`
+     - **Runtime**: `Python`
+     - **Build Command**: `pip install --upgrade pip && pip install -e .`
+     - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2 --timeout-keep-alive 65`
+     - **Health Check Path**: `/api/v1/health`
+   - Set Environment Variables:
+     - `ENVIRONMENT=production`
+     - `DB_POOL_CLASS=queue`
+     - `DB_POOL_SIZE=10`
+     - `DB_MAX_OVERFLOW=5`
+     - `DB_POOL_RECYCLE_SECONDS=1800`
+     - `APP_DATABASE_URL=<your-supabase-connection-string>`
+     - `ANALYTICS_DATABASE_URL=<your-supabase-connection-string>`
+     - `FRONTEND_ORIGIN=https://<your-frontend-domain>.vercel.app`
+     - `SESSION_HMAC_SECRET=<secret>`
+     - `ACCESS_TOKEN_SECRET=<secret>`
+     - `GEMINI_API_KEY=<key>` (and/or `GROQ_API_KEY`)
+
+2. **Deploy Frontend to Vercel**:
+   - Create a Vercel project rooted at `frontend/`.
+   - Set `BACKEND_INTERNAL_URL=https://<your-render-service>.onrender.com/api/v1` (or `NEXT_PUBLIC_API_URL`).
+   - Next.js will automatically proxy `/api/v1/:path*` to the persistent Render instance, eliminating CORS preflight `OPTIONS` latency and avoiding serverless Python cold starts.
+
+3. **Alternative: Serverless Vercel Dual Deploy**:
+   - Deploy `backend/` to Vercel via `backend/vercel.json` and `frontend/` to Vercel with `NEXT_PUBLIC_API_URL` pointing to the backend function. Note: Ephemeral Python serverless functions incur cold start latency.
 
 ## Current production verification
 

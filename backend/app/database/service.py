@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections import OrderedDict
 from copy import deepcopy
@@ -47,8 +48,24 @@ class DatabaseService:
         # statements. Disabling preparation is safe for direct/session URLs
         # too and keeps the same runtime configuration portable to Vercel.
         kwargs: dict[str, Any] = {"pool_pre_ping": True, "connect_args": {"prepare_threshold": None}}
-        if settings.environment == "production":
+        pool_mode = getattr(settings, "db_pool_class", "auto")
+        is_serverless = (
+            pool_mode == "null"
+            or (
+                pool_mode == "auto"
+                and (
+                    settings.environment == "serverless"
+                    or os.environ.get("VERCEL") == "1"
+                    or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") is not None
+                )
+            )
+        )
+        if is_serverless:
             kwargs["poolclass"] = NullPool
+        else:
+            kwargs["pool_size"] = getattr(settings, "db_pool_size", 10)
+            kwargs["max_overflow"] = getattr(settings, "db_max_overflow", 5)
+            kwargs["pool_recycle"] = getattr(settings, "db_pool_recycle_seconds", 1800)
         self.app_engine: Engine = app_engine or create_engine(
             self._normalize_postgres_url(settings.app_database_url), **kwargs
         )

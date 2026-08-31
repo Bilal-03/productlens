@@ -16,5 +16,21 @@ services:
       timeout: 3s
       retries: 20
 
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DB_POOL_CLASS=queue
+      - APP_DATABASE_URL=postgresql+psycopg://productlens:productlens@postgres:5432/productlens
+      - ANALYTICS_DATABASE_URL=postgresql+psycopg://productlens:productlens@postgres:5432/productlens
+      - FRONTEND_ORIGIN=http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   productlens_pg:

@@ -1,6 +1,8 @@
 import type { AccessContextResponse, AdvancedAnalyticsResponse, ConnectorStatusResponse, CopilotResponse, ExperimentAnalysisResponse, ExperimentListResponse, NotebookInsight, NotebookResponse, NotebookSummaryResponse, OverviewSummaryResponse, ProductPulseResponse, WeeklyReportResponse } from "./types";
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? "/api/v1" : "http://localhost:8000/api/v1");
 const ACCESS_TOKEN_KEY = "productlens-access-token";
 const SUPABASE_SESSION_KEY = "productlens-supabase-session";
 

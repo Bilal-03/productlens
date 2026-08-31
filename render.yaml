@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: productlens-api
+    runtime: python
+    rootDir: backend
+    plan: starter
+    region: oregon
+    buildCommand: "pip install --upgrade pip && pip install -e ."
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2 --timeout-keep-alive 65"
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DB_POOL_CLASS
+        value: queue
+      - key: DB_POOL_SIZE
+        value: "10"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+      - key: DB_POOL_RECYCLE_SECONDS
+        value: "1800"
+      - key: APP_DATABASE_URL
+        sync: false
+      - key: ANALYTICS_DATABASE_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SESSION_HMAC_SECRET
+        sync: false
+      - key: ACCESS_TOKEN_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

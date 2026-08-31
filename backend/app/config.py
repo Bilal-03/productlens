@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     database_admin_url: str = "postgresql+psycopg://productlens:productlens@localhost:5432/productlens"
     app_database_url: str = "postgresql+psycopg://productlens:productlens@localhost:5432/productlens"
     analytics_database_url: str = "postgresql+psycopg://productlens:productlens@localhost:5432/productlens"
+    db_pool_class: Literal["queue", "null", "auto"] = "auto"
+    db_pool_size: int = Field(default=10, ge=1, le=100)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86_400)
     frontend_origin: str = "http://localhost:3000"
     session_hmac_secret: SecretStr = SecretStr("development-only-secret-change-me")
     llm_provider: str = "gemini"
