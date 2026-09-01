@@ -37,6 +37,6 @@ async def request_size_limit(request: Request, call_next):  # type: ignore[no-un
     return await call_next(request)
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root() -> dict[str, str]:
     return {"service": "ProductLens AI", "docs": "/docs", "health": f"{settings.api_prefix}/health"}

@@ -228,7 +228,7 @@ def access_context_info(
     )
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 def health(database: DatabaseService = Depends(database_service)) -> dict[str, object]:
     return {"status": "ok" if database.health() else "degraded", "database": database.health(), "service": "productlens-api"}
 

@@ -418,3 +418,27 @@ def test_experiment_and_advanced_routes_return_typed_contracts() -> None:
     assert advanced_response.json()["type"] == "advanced_analytics"
     assert invalid_experiment.status_code == 422
     assert invalid_advanced.status_code == 422
+
+
+def test_health_and_root_endpoints_support_get_and_head() -> None:
+    client = TestClient(app)
+
+    class StubDatabase:
+        def health(self) -> bool:
+            return True
+
+    app.dependency_overrides[database_service] = lambda: StubDatabase()
+    try:
+        get_health = client.get("/api/v1/health")
+        head_health = client.head("/api/v1/health")
+        get_root = client.get("/")
+        head_root = client.head("/")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert get_health.status_code == 200
+    assert get_health.json()["status"] == "ok"
+    assert head_health.status_code == 200
+    assert get_root.status_code == 200
+    assert head_root.status_code == 200
+
